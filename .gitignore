@@ -47,6 +47,8 @@ test/manual/lyric-audit-output/*
 deploy/docker/.env
 deploy/docker/data/
 .agents/
+.gemini/
+.mimosa/
 skills-lock.json
 TODO.MD
 commit.md
