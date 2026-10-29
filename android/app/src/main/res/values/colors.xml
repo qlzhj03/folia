@@ -1,0 +1,5 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <!-- 应用的深色底，与 index.html / PWA manifest 的 #09090b 一致：窗口背景和系统栏过渡区域都用它，不留异色条 -->
+    <color name="foliaBackground">#09090b</color>
+</resources>

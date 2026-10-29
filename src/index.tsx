@@ -3,6 +3,7 @@ import { installGlobalVisualizerFrameRateLimiter } from './utils/frameRateLimite
 import { installConsoleLogCapture } from './utils/consoleLogBuffer';
 import { installDebugModule } from './services/debug/debugModule';
 import { installMemorySampleFeed } from './services/debug/memorySamples';
+import { initCapacitorShell } from './services/capacitorShell';
 // import { installCoverSizeAudit } from './services/debug/coverSizeSamples';
 // @ts-ignore
 globalThis.Buffer = Buffer;
@@ -21,5 +22,8 @@ installMemorySampleFeed();
 // observer or the rows it retains.
 // if (import.meta.env.DEV) installCoverSizeAudit();
 installGlobalVisualizerFrameRateLimiter();
+// Before bootstrap paints: in the Capacitor Android shell this adds viewport-fit=cover so the
+// WebView fills the whole screen (no native padding strip above). No-op in browsers and Electron.
+initCapacitorShell();
 
 void import('./bootstrap');
