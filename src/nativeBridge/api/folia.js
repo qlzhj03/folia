@@ -1,6 +1,6 @@
-// 内置桥的调度器：页面侧发来的 FOLIA_API_REQUEST 在这里按路径分发到各平台的实现。
-// 当前只带网易云；QQ / 酷狗 / 波点的接入各占一个 provider 分支与各自目录下的实现文件，
-// 接入时在 handleFoliaApiRequest 里加分支即可（上游 folia-sonnet 的同名文件是全量版）。
+// 内置桥的调度器：页面侧发来的 FOLIA_API_REQUEST 在这里按 provider 分发到各平台的实现。
+// 当前带网易云与 QQ（三条扫码通道都在）；酷狗 / 波点接入时各加一个 provider 分支与
+// 各自目录下的实现文件即可（上游 folia-sonnet 的同名文件是全量版）。
 
 import { eapiRequest } from './eapi.js';
 import { weapiRequest, UA } from './weapi.js';
@@ -8,12 +8,62 @@ import { weapiRequest, UA } from './weapi.js';
 // 于是都不带 cookie（csrf_token 取不到，上游一律答 301），探索页每一栏都是空的。
 // 具体实现放在这一家自己的目录下（桥的配额只数共享文件里出现的平台名）。
 import { registerAnonymousCookie } from './netease/anonimous.js';
-import { noteLibraryStep } from './libraryTrace.js';
+import { noteLibraryStep, describePayload } from './libraryTrace.js';
 import {
   getNeteaseCookie,
   hasNeteaseLogin,
   parseCookieString,
+  qqCookieUin,
 } from './cookies.js';
+import {
+  getQQCookie,
+  getQQLoginStatus,
+  handleQQLoginQrCreate,
+  handleQQLoginQrCheck,
+  handleQQSearch,
+  handleQQSongUrl,
+  handleQQLyric,
+  handleQQUserPlaylists,
+  handleQQPlaylistTracks,
+  qqSongDetail,
+  qqMusicRequest,
+  qqGetJSON,
+  buildQQAuthComm,
+  qqSongDetailsBatch,
+  handleQQGuessYouLike,
+  handleQQDailySongs,
+  handleQQRecommendPlaylists,
+  handleQQPlaylistTracksWrite,
+  handleQQPlaylistSubscribe,
+  handleQQSubscriptionStatus,
+  handleQQSongLikeWrite,
+  handleQQAlbumSubscribe,
+  readNewSongs,
+  readNewAlbums,
+  readToplists,
+  readToplistSongs,
+  readPlaylistCategories,
+  readCategoryPlaylists,
+  readRadar,
+  readRadioList,
+  readRadioTracks,
+  readSimilarSongs,
+  readUserVip,
+  readUserCloud,
+  createPlaylist,
+  searchCatalog,
+} from './qq.js';
+import {
+  qqWechatGetLoginQr,
+  qqWechatCheckLoginQr,
+  qqWechatCancelLoginQr,
+} from './qq-wechat-login.js';
+import {
+  qqAppGetLoginQr,
+  qqAppCheckLoginQr,
+  qqAppCancelLoginQr,
+} from './qq/appLogin.js';
+import { clearQQPlatformSessionCookies } from './qq-login-qr.js';
 import {
   getLoginInfo,
   handleLoginQrCheck,
@@ -165,6 +215,95 @@ function profileFromLoginInfo(info) {
 
 async function requireLoginInfo(cookie) {
   return await getLoginInfo(cookie);
+}
+
+function jsonBody(body) {
+  return body && typeof body === 'object' ? body : {};
+}
+
+function encodeBridgeKey(value) {
+  return btoa(unescape(encodeURIComponent(JSON.stringify(value || {}))));
+}
+
+function decodeBridgeKey(value) {
+  try {
+    return JSON.parse(decodeURIComponent(escape(atob(String(value || '')))));
+  } catch (_) {
+    return {};
+  }
+}
+
+/** 扫码通道归一：wechat 走微信 Web OAuth，app 走 QQ 音乐 App 那条（三合一），其余按 qq 处理。 */
+function qqChannelOf(value) {
+  const channel = String(value || '').toLowerCase();
+  if (channel === 'wechat') return 'wechat';
+  if (channel === 'qqmusic' || channel === 'app') return 'qqmusic';
+  return 'qq';
+}
+
+/** 只回报主机名：头像 URL 里带着用户 hash，整条写进报告没有必要。 */
+function describeUrlHost(value) {
+  try {
+    return new URL(String(value)).host || 'empty';
+  } catch (_) {
+    return 'unparseable';
+  }
+}
+
+function qqProfile(status) {
+  if (!status?.loggedIn) return null;
+  return {
+    uin: status.uin || status.userId || '',
+    str_musicid: status.uin || status.userId || '',
+    musicid: status.uin || status.userId || '',
+    nickname: status.nickname || status.name || '',
+    nick: status.nickname || status.name || '',
+    logo: status.avatar || status.avatarUrl || '',
+    avatarUrl: status.avatar || status.avatarUrl || '',
+    vipType: status.vipType || 0,
+  };
+}
+
+function qqPlaylistRow(item) {
+  return {
+    tid: item?.id,
+    dirId: Number(item?.dirid || item?.dirId || 0) || undefined,
+    dirName: item?.name || '',
+    name: item?.name || '',
+    songNum: Number(item?.trackCount || 0),
+    songnum: Number(item?.trackCount || 0),
+    bigpicUrl: item?.cover || '',
+    picUrl: item?.cover || '',
+    dirShow: 1,
+    subscribed: !!item?.subscribed,
+  };
+}
+
+function mergeOperationParams(input, url) {
+  return {
+    ...Object.fromEntries(url.searchParams.entries()),
+    ...(input?.params || {}),
+    ...(input?.body && typeof input.body === 'object' ? input.body : {}),
+  };
+}
+
+function pathSegments(url) {
+  return String(url.pathname || '')
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment));
+}
+
+function qqGtk(cookieHeader) {
+  const cookie = parseCookieString(cookieHeader);
+  const key = cookie.qm_keyst || cookie.qqmusic_key || cookie.skey || cookie.p_skey || '';
+  if (!key) return 5381;
+  let hash = 5381;
+  for (let index = 0; index < key.length; index += 1) {
+    hash += (hash << 5) + key.charCodeAt(index);
+    hash &= 0x7fffffff;
+  }
+  return hash & 0x7fffffff;
 }
 
 async function handleLoginStatus(cookie) {
@@ -514,8 +653,559 @@ async function handleSubscribe(url, body, cookie, path) {
   return await eapiJson(path, { id, t }, cookie);
 }
 
+async function handleFoliaQqRequest(input, url) {
+  const operation = String(input.operation || url.pathname);
+  const params = mergeOperationParams(input, url);
+  const segments = pathSegments(url);
+  const cookie = await getQQCookie();
+  const cookieObject = parseCookieString(cookie || '');
+  noteLibraryStep('qq', 'request', {
+    operation,
+    hasUin: Boolean(qqCookieUin(cookie || '')),
+    hasMusicKey: Boolean(
+      cookieObject.qm_keyst || cookieObject.qqmusic_key || cookieObject.music_key,
+    ),
+    cookieCount: String(cookie || '').split(';').filter(Boolean).length,
+  });
+  try {
+    const result = await routeFoliaQqRequest(operation, params, segments, url, cookie);
+    noteLibraryStep('qq', 'result', {
+      operation,
+      code: result && typeof result === 'object' ? result.code : undefined,
+      songs: Array.isArray(result?.songs) ? result.songs.length : undefined,
+      playlist: Array.isArray(result?.playlist) ? result.playlist.length : undefined,
+      albums: Array.isArray(result?.albums) ? result.albums.length : undefined,
+      total: result && typeof result === 'object' ? result.total : undefined,
+      keys: describePayload(result && typeof result === 'object' ? result : null),
+    });
+    return result;
+  } catch (error) {
+    noteLibraryStep('qq', 'error', {
+      operation,
+      name: error && error.name ? error.name : 'Error',
+      message: error && error.message ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
+async function routeFoliaQqRequest(operation, params, segments, url, cookie) {
+
+  if (operation === 'login_channels') {
+    // 三条扫码通道都有：qq（ptlogin 网页码，只有手机 QQ 能扫）、wechat（微信 OAuth）、
+    // qqmusic（QQ 音乐 App 的码，QQ音乐 App / 手机QQ / 微信 任一款都能扫）。
+    // `sessionMode` 说会话存在本机（不是 Serverless 的 sealed 令牌）—— 前端据此认「桌面/Docker 那种
+    // 后端」，于是不再让人先选通道，直接用三合一那张码。
+    return { code: 200, data: { channels: ['qq', 'wechat', 'qqmusic'], sessionMode: 'stored' } };
+  }
+  if (operation === 'login_status') {
+    const status = await getQQLoginStatus(cookie);
+    const profile = qqProfile(status);
+    // 「用户名 / 头像不显示」时，报告里必须能直接看出是登录态没认出来，还是上游资料页没给这两个字段。
+    noteLibraryStep('qq', 'login-status:profile', {
+      loggedIn: Boolean(status?.loggedIn),
+      uinTail: status?.uin ? `…${String(status.uin).slice(-4)}` : 'missing',
+      nickname: profile?.nickname ? `present(len=${String(profile.nickname).length})` : 'missing',
+      avatar: profile?.logo ? describeUrlHost(profile.logo) : 'missing',
+      source: status?.profileSource || 'unknown',
+      profileUnavailable: Boolean(status?.profileUnavailable),
+      missing: status?.missing
+        ? Object.entries(status.missing).filter(([, absent]) => absent).map(([key]) => key).join(',') || 'none'
+        : undefined,
+    });
+    return {
+      code: 200,
+      data: {
+        profile,
+        account: status?.loggedIn ? { id: status.uin || status.userId || null } : null,
+      },
+    };
+  }
+  if (operation === 'user_detail') {
+    const status = await getQQLoginStatus(cookie);
+    return { code: 200, profile: qqProfile(status) };
+  }
+  if (operation === 'logout') {
+    // 登出必须连 cookie 罐里的平台凭据一起清掉：只清前端会话的话，
+    // 下一条通道登录（微信 → QQ 这种）会把旧凭据当成自己的拼出一个用不了的会话。
+    await clearQQPlatformSessionCookies();
+    return { code: 200 };
+  }
+  if (operation === 'login_qr_key') {
+    let channel = qqChannelOf(firstValue(params.channel, url.searchParams.get('channel')));
+    let qr;
+    if (channel === 'qqmusic') {
+      // 三合一那张码要一条到 mu.y.qq.com 的 WebSocket（见 qq/appLogin.js）。WebView 里被拦、或上游
+      // 拒收时不能让登录整个不可用：退回手机 QQ 的网页码，照样能登，只是那张码只认手机 QQ。
+      try {
+        qr = await qqAppGetLoginQr();
+      } catch (error) {
+        noteLibraryStep('qq', 'login-qr:app-fallback', {
+          message: error && error.message ? error.message : String(error),
+        });
+        channel = 'qq';
+        qr = await handleQQLoginQrCreate();
+      }
+    } else {
+      qr = channel === 'wechat' ? await qqWechatGetLoginQr() : await handleQQLoginQrCreate();
+    }
+    const key = encodeBridgeKey({
+      channel,
+      qrsig: qr.qrsig,
+      ptqrtoken: qr.ptqrtoken,
+      qrimg: qr.qrimg || qr.img,
+    });
+    return { code: 200, data: { code: 200, unikey: key } };
+  }
+  if (operation === 'login_qr_create') {
+    const key = decodeBridgeKey(firstValue(params.key, url.searchParams.get('key')));
+    return {
+      code: 200,
+      data: {
+        qrimg: key.qrimg || '',
+        qrurl: '',
+      },
+    };
+  }
+  if (operation === 'login_qr_check') {
+    const key = decodeBridgeKey(firstValue(params.key, url.searchParams.get('key')));
+    const result = key.channel === 'wechat'
+      ? await qqWechatCheckLoginQr({ qrsig: key.qrsig, ptqrtoken: key.ptqrtoken })
+      : key.channel === 'qqmusic'
+        ? await qqAppCheckLoginQr(key.qrsig)
+        : await handleQQLoginQrCheck(key.qrsig, key.ptqrtoken);
+    if (result?.isOk || result?.loggedIn) {
+      /*
+       * 803 必须**带着会话一起交出去**。
+       *
+       * 页面侧只认这个字段：qqTransport 的 persistConfirmedSession 与 qqProvider 的
+       * checkLogin 都是 `code === 803` 时把 `response.cookie` 写进 localStorage。
+       * 给空串等于「手机上明明确认了、会话却没存下」—— 紧接着的 user_detail 因为
+       * hasQqSession() 为假直接跳过，诊断里就只剩那两行
+       * `session: backend session stored=no` / `no backend session stored`。
+       *
+       * 换票拿到的 cookie 已经写进 jar 了（handleQQLoginQrCheck 里 saveProviderCookie），
+       * 所以这里从 jar 读回一份完整的即可；换票那份能用就先用它。
+       */
+      const cookie = String(result?.session?.cookie || '').trim()
+        || String((await getQQCookie()) || '').trim();
+      return { code: 803, message: result.message || 'Login successful', cookie };
+    }
+    if (result?.refresh) return { code: 800, message: result.message || 'QR expired' };
+    if (result?.status === 'scanned' || Number(result?.code) === 67 || Number(result?.code) === 802) {
+      return { code: 802, message: result.message || 'Scanned' };
+    }
+    // 上游已经确认、换票却连续失败：这是终态错误，不能再当成「等待扫码」吞掉 ——
+    // 否则界面会一直转圈，而手机上早就提示登录成功了。
+    if (result?.retryable === false && result?.status === 'error') {
+      return {
+        code: 0,
+        message: result.message || '登录失败',
+        failureStage: result.failureStage,
+        failureReason: result.failureReason,
+        ticketExchangeAttempts: result.ticketExchangeAttempts,
+        // 上游风控码（如设备超限 20279）原样上交：渲染层的设备超限判定靠它把这次失败
+        // 归成 device-limit，登录窗口才说得出「去清理登录设备」。
+        ...(result.upstreamCode === undefined ? {} : { upstreamCode: result.upstreamCode }),
+      };
+    }
+    return { code: 801, message: result?.message || 'Waiting for scan' };
+  }
+  if (operation === 'login_qr_cancel') {
+    const key = decodeBridgeKey(firstValue(params.key, url.searchParams.get('key')));
+    if (key.channel === 'wechat') qqWechatCancelLoginQr(key.qrsig);
+    if (key.channel === 'qqmusic') qqAppCancelLoginQr(key.qrsig);
+    return { code: 200 };
+  }
+  if (operation === 'music_play') {
+    const songmid = firstValue(params.songmid, segments[segments.length - 1]);
+    const result = await handleQQSongUrl(
+      songmid,
+      firstValue(params.mediaId, params.media_mid),
+      firstValue(params.quality, '320'),
+      cookie,
+    );
+    return {
+      code: 200,
+      data: {
+        playUrl: {
+          [songmid]: {
+            url: result?.url || '',
+            error: result?.error || '',
+            message: result?.message || '',
+          },
+        },
+        sip: [],
+      },
+    };
+  }
+  if (operation === 'song_info') {
+    const songmid = firstValue(params.songmid, segments[1], segments[0]);
+    const track = await qqSongDetail(songmid, params, cookie);
+    return {
+      code: 0,
+      response: {
+        code: 0,
+        songinfo: { data: { track_info: track } },
+      },
+    };
+  }
+  if (operation === 'song_list_detail') {
+    const disstid = firstValue(params.disstid, segments[segments.length - 1]);
+    const result = await handleQQPlaylistTracks(disstid, cookie, {
+      dirid: params.dirid,
+      hostUin: params.hostUin,
+    });
+    return {
+      code: 0,
+      response: {
+        code: 0,
+        cdlist: [{
+          disstid,
+          dissname: result?.playlist?.name || result?.name || '',
+          logo: result?.playlist?.cover || result?.cover || '',
+          songlist: result?.songs || [],
+          total_song_num: Number(result?.playlist?.trackCount || result?.songs?.length || 0),
+        }],
+      },
+    };
+  }
+  if (operation === 'user_playlist') {
+    try {
+      const result = await handleQQUserPlaylists(cookie);
+      // 凭据失效时上游一路「未登录」的业务码，收集到的结果是空数组 —— 回
+      // `{ code: 0, playlist: [] }` 就等于告诉上层「这个人没有歌单」，界面只剩一句
+      // 没有来由的「暂无内容」。如实报 AUTH_REQUIRED，上层才会提示重新登录。
+      if (result?.loginRequired || result?.loggedIn === false) {
+        noteLibraryStep('qq', 'playlists:login-required', {
+          loginExpired: Boolean(result?.loginExpired),
+          message: result?.message || '',
+        });
+        return {
+          __foliaBridgeError: 'AUTH_REQUIRED',
+          message: result?.message || 'QQ 登录已失效，请重新登录',
+        };
+      }
+      const playlist = (result?.playlists || []).map(qqPlaylistRow);
+      noteLibraryStep('qq', 'playlists', {
+        count: playlist.length,
+        keys: describePayload(result),
+      });
+      return { code: 0, playlist, total: playlist.length, more: false };
+    } catch (error) {
+      noteLibraryStep('qq', 'playlists:error', {
+        message: error && error.message ? error.message : String(error),
+      });
+      throw error;
+    }
+  }
+  if (operation === 'user_liked_songs') {
+    const offset = numberValue(params.offset, 0);
+    const limit = Math.min(100, Math.max(1, numberValue(params.limit, 100)));
+    const uin = qqCookieUin(cookie);
+    noteLibraryStep('qq', 'liked:start', { offset, limit, hasUin: Boolean(uin) });
+
+    // DissInfo is the only endpoint that returns complete song records (name,
+    // artists, album, duration) in one call, so ask it first. The map-based
+    // path below only yields mids and used to leave every row unnamed.
+    try {
+      const cookieObject = parseCookieString(cookie);
+      const encryptedUin = firstValue(
+        cookieObject.encryptUin,
+        cookieObject.encrypt_uin,
+        cookieObject.str_musicid,
+        cookieObject.wxuin,
+        uin,
+      );
+      const json = await qqMusicRequest({
+        comm: buildQQAuthComm(cookie),
+        req_0: {
+          module: 'music.srfDissInfo.DissInfo',
+          method: 'CgiGetDiss',
+          param: {
+            disstid: 0,
+            dirid: 201,
+            tag: true,
+            song_begin: offset,
+            song_num: limit,
+            userinfo: true,
+            orderlist: true,
+            enc_host_uin: String(encryptedUin || ''),
+          },
+        },
+      }, cookie);
+      const block = json?.req_0 || {};
+      const data = block.data || {};
+      const songs = data.songlist || data.songList || [];
+      const total = numberValue(data.total_song_num, data.total, data.song_num, songs.length);
+      noteLibraryStep('qq', 'liked:path2', {
+        code: Number(block.code) || 0,
+        songCount: Array.isArray(songs) ? songs.length : 0,
+        total,
+        keys: describePayload(data),
+      });
+      if (Array.isArray(songs) && songs.length) {
+        return {
+          code: Number(block.code) || 0,
+          songs,
+          total,
+          more: Boolean(data.hasmore) || offset + songs.length < total,
+        };
+      }
+    } catch (error) {
+      noteLibraryStep('qq', 'liked:path2:error', {
+        message: error && error.message ? error.message : String(error),
+      });
+    }
+
+    try {
+      const fav = await qqGetJSON('https://c.y.qq.com/splcloud/fcgi-bin/fcg_musiclist_getmyfav.fcg', {
+        dirid: 201,
+        dirinfo: 1,
+        g_tk: qqGtk(cookie),
+        format: 'json',
+        loginUin: uin,
+        hostUin: uin,
+      }, cookie);
+      const midMap = fav?.mapmid || fav?.data?.mapmid || {};
+      const idMap = fav?.map || fav?.data?.map || {};
+      const allMids = Object.keys(midMap).filter(Boolean);
+      noteLibraryStep('qq', 'liked:path1', {
+        code: fav?.code,
+        midCount: allMids.length,
+        keys: describePayload(fav),
+      });
+      if (allMids.length) {
+        const pageMids = allMids.slice(offset, offset + limit);
+        const songs = pageMids.map((mid) => ({
+          mid,
+          songmid: mid,
+          id: midMap[mid] || idMap[mid],
+        }));
+        await qqSongDetailsBatch(songs, cookie);
+        return {
+          code: 0,
+          songs,
+          total: allMids.length,
+          more: offset + songs.length < allMids.length,
+        };
+      }
+    } catch (error) {
+      noteLibraryStep('qq', 'liked:path1:error', {
+        message: error && error.message ? error.message : String(error),
+      });
+    }
+
+    try {
+      const json = await qqMusicRequest({
+        comm: buildQQAuthComm(cookie),
+        req_0: {
+          module: 'music.musicasset.PlaylistFavRead',
+          method: 'GetSongList',
+          param: {
+            dirId: 201,
+            uin: Number(uin) || uin,
+            order: 1,
+            begin: offset,
+            num: limit,
+          },
+        },
+      }, cookie);
+      const block = json?.req_0 || {};
+      const data = block.data || {};
+      const songs = data.songlist || data.songList || data.list || [];
+      noteLibraryStep('qq', 'liked:path3', {
+        code: Number(block.code) || 0,
+        subcode: block.subcode,
+        songCount: Array.isArray(songs) ? songs.length : 0,
+        total: numberValue(data.total, data.total_song_num, data.totalSongNum, 0),
+        keys: describePayload(data),
+      });
+      return {
+        code: Number(block.code) || 0,
+        songs: Array.isArray(songs) ? songs : [],
+        total: numberValue(data.total, data.total_song_num, data.totalSongNum, songs.length),
+        more: Array.isArray(songs) && songs.length >= limit,
+      };
+    } catch (error) {
+      noteLibraryStep('qq', 'liked:path3:error', {
+        message: error && error.message ? error.message : String(error),
+      });
+      return { code: 0, songs: [], total: 0, more: false };
+    }
+  }
+  if (operation === 'user_playlist_detail') {
+    const result = await handleQQPlaylistTracks(firstValue(params.tid, params.id), cookie, {
+      dirid: params.dirid,
+      hostUin: params.hostUin,
+    });
+    return {
+      code: 0,
+      songs: result?.songs || [],
+      total: result?.songs?.length || 0,
+      more: false,
+    };
+  }
+  if (operation === 'user_albums') {
+    const offset = Math.max(0, numberValue(params.offset, 0));
+    const limit = Math.min(100, Math.max(1, numberValue(params.limit, 20)));
+    const uin = qqCookieUin(cookie);
+    const json = await qqGetJSON('https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg', {
+      ct: 20,
+      cid: 205360956,
+      userid: uin,
+      reqtype: 2,
+      sin: offset,
+      ein: offset + limit - 1,
+      format: 'json',
+    }, cookie);
+    const data = json?.data || json || {};
+    const albums = data.albumlist || data.cdlist || data.list || data.albums || [];
+    const total = numberValue(data.totalalbum, data.total_album, data.total, data.album_total, albums.length);
+    return {
+      code: Number(json?.code) || 0,
+      albums: Array.isArray(albums) ? albums : [],
+      total,
+      more: offset + (Array.isArray(albums) ? albums.length : 0) < total,
+    };
+  }
+  if (operation === 'album_info') {
+    const albummid = firstValue(params.albummid, segments[segments.length - 1]);
+    const json = await qqGetJSON(
+      'https://c.y.qq.com/v8/fcg-bin/fcg_v8_album_info_cp.fcg',
+      { albummid, format: 'json', outCharset: 'utf-8' },
+      cookie,
+    );
+    return { code: 0, response: { code: Number(json?.code) || 0, data: json?.data || {} } };
+  }
+  if (operation === 'artist_songs') {
+    const singermid = firstValue(params.singermid, segments[segments.length - 1]);
+    const limit = numberValue(params.limit, 30);
+    const page = numberValue(params.page, 1);
+    const json = await qqMusicRequest({
+      comm: { ct: 24, cv: 0 },
+      singer: {
+        module: 'music.web_singer_info_svr',
+        method: 'get_singer_detail_info',
+        param: { sort: 5, singermid, sin: Math.max(0, (page - 1) * limit), num: limit },
+      },
+    }, cookie);
+    return { code: 0, response: { singer: json?.singer || { code: 0, data: {} } } };
+  }
+  if (operation === 'artist_albums') {
+    const singermid = firstValue(params.singermid, segments[segments.length - 1]);
+    const limit = numberValue(params.limit, 30);
+    const page = numberValue(params.page, 0);
+    const json = await qqMusicRequest({
+      comm: { ct: 24, cv: 0 },
+      singer: {
+        module: 'music.musichallAlbum.AlbumListServer',
+        method: 'GetAlbumList',
+        param: { sort: 5, singermid, begin: page, num: limit },
+      },
+    }, cookie);
+    return { code: 0, response: { singer: json?.singer || { code: 0, data: {} } } };
+  }
+
+  // ---- 推荐（qq-music-api 3.2.0 / 3.3.0）—— 与自建后端同一套字段，读不出来就是空结果 ----
+  if (operation === 'user_guess_you_like') {
+    return await handleQQGuessYouLike(cookie);
+  }
+  if (operation === 'user_daily_songs') {
+    return await handleQQDailySongs(cookie);
+  }
+  if (operation === 'recommend_playlists') {
+    const limit = numberValue(params.limit, 25);
+    return await handleQQRecommendPlaylists(limit, cookie);
+  }
+  // ---- 写入：正文已经在 mergeOperationParams 里并进 params，不重试 ----
+  if (operation === 'user_playlist_tracks') {
+    return await handleQQPlaylistTracksWrite(params, cookie);
+  }
+  if (operation === 'user_playlist_subscribe') {
+    return await handleQQPlaylistSubscribe(params, cookie);
+  }
+  if (operation === 'user_subscription_status') {
+    return await handleQQSubscriptionStatus(
+      firstValue(params.type, 'playlist'),
+      firstValue(params.ids, ''),
+      cookie,
+    );
+  }
+  // ---- 红心与收藏专辑（qq-music-api 3.3.1）：同样只写一次，读回确认后才回成功 ----
+  if (operation === 'user_song_like') {
+    return await handleQQSongLikeWrite(params, cookie);
+  }
+  if (operation === 'user_album_subscribe') {
+    return await handleQQAlbumSubscribe(params, cookie);
+  }
+
+  // ---- 探索页那一组（3.3.3）—— 新歌、新碟、榜单、分类是公开内容，其余要登录 ----
+  if (operation === 'recommend_new_songs') {
+    return await readNewSongs(params, cookie);
+  }
+  if (operation === 'recommend_new_albums') {
+    return await readNewAlbums(params, cookie);
+  }
+  if (operation === 'recommend_toplists') {
+    return await readToplists(cookie);
+  }
+  if (operation === 'recommend_toplist') {
+    return await readToplistSongs(params, cookie);
+  }
+  if (operation === 'recommend_categories') {
+    return await readPlaylistCategories(cookie);
+  }
+  if (operation === 'recommend_category_playlists') {
+    return await readCategoryPlaylists(params, cookie);
+  }
+  if (operation === 'recommend_radar') {
+    return await readRadar(params, cookie);
+  }
+  if (operation === 'radio_list') {
+    return await readRadioList(cookie);
+  }
+  if (operation === 'radio_tracks') {
+    return await readRadioTracks(params, cookie);
+  }
+  if (operation === 'song_similar') {
+    return await readSimilarSongs(params, cookie);
+  }
+  // ---- 账号的两条与建歌单 ----
+  if (operation === 'user_vip') {
+    return await readUserVip(cookie);
+  }
+  if (operation === 'user_cloud') {
+    return await readUserCloud(params, cookie);
+  }
+  if (operation === 'user_playlist_create') {
+    return await createPlaylist(params, cookie);
+  }
+  if (operation === 'search') {
+    return await searchCatalog(params, cookie);
+  }
+  // `login_refresh` 是 Serverless 后端换 token 的那条路由：本地桥的会话就是 cookie 本身，
+  // 没有可换的东西。服务层把这里的 UNSUPPORTED 当成「后端没有这条路由」，不再来问。
+
+  return {
+    __foliaBridgeError: 'UNSUPPORTED',
+    provider: 'qq',
+    operation,
+    message: `Folia QQ bridge does not implement ${operation}`,
+  };
+}
+
 export async function handleFoliaApiRequest(input) {
   const { url, body, method } = parseInput(input);
+  if (input?.provider === 'qq') {
+    return await handleFoliaQqRequest(input, url);
+  }
+  if (input?.provider === 'qq_raw') {
+    if (input.operation !== 'musicu') {
+      return { __foliaBridgeError: 'UNSUPPORTED', message: `Unknown QQ raw operation: ${input.operation}` };
+    }
+    return await qqMusicRequest(body, await getQQCookie());
+  }
   // ⚠️ 只认原生 cookie 罐是不够的：登录是渲染层自己存的会话值，罐里可能根本没有 ——
   // 那这边就等于没登录，weapi 一律答 `{code: 301}`；而 weapiJson 为了让整页不至于失败
   // 是**不抛错**的，于是每一栏都空着，探索页看上去就是「空的」而不是「读不出来」。
