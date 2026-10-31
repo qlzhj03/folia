@@ -32,6 +32,7 @@ import { describeQqFailure } from './qqFailure';
 import { getQqCloudCollection, getQqCloudTracks, getQqListTracks, qqListKindOf } from './qqLists';
 import { qqExplore } from './qqExplore';
 import { areQqSongsLiked, resetQqVipMemory, withQqVipType } from './qqAccount';
+import { noteLibraryStep } from '../../../nativeBridge/api/libraryTrace.js';
 import { requestQqPreviewSource } from './qqPreview';
 import { noteQqBackendDeclaration, qqBackendSessionMode, resetQqBackendDeclaration } from './qqBackendDeclaration';
 import { keepQqSessionFresh, resetQqSessionRefresh, stopQqSessionRefresh } from './qqSessionRefresh';
@@ -180,14 +181,40 @@ const loadRawLikedTracks = async (
     };
 };
 
+// 探索页的排行榜/电台卡片 id 自带类型（toplist-4、radio-101）；有的界面只把 id 交回来，
+// 用 id 还原出 providerData，否则会被当成普通歌单去读、结果空列表（排行榜点进去「没有数据」）。
+// 正则匹配用 String.match（与 RegExp.exec 对非全局正则等价的写法）。
+const qqListCollectionFromId = (id: MediaId): ProviderCollection | null => {
+    const value = String(id || '');
+    const toplist = value.match(/^toplist-(\d+)$/);
+    if (toplist) {
+        return { providerId: 'qq', id: value, type: 'playlist', name: '', providerData: { list: 'toplist', listId: Number(toplist[1]) } };
+    }
+    const radio = value.match(/^radio-(\d+)$/);
+    if (radio) {
+        return { providerId: 'qq', id: value, type: 'playlist', name: '', providerData: { list: 'radio', listId: Number(radio[1]) } };
+    }
+    return null;
+};
+
 const getPlaylistTracks = async (
     id: MediaId,
     limit: number,
     offset: number,
     collection?: ProviderCollection,
 ): Promise<ProviderPage<ReturnType<typeof normalizeQqSong>>> => {
+    if (!collection || !qqListKindOf(collection)) {
+        const fromId = qqListCollectionFromId(id);
+        if (fromId) collection = collection ? { ...collection, providerData: { ...collection.providerData, ...fromId.providerData } } : fromId;
+    }
     // 排行榜和电台的卡片（探索页）不是歌单，改走它们自己的路由。
-    if (collection && qqListKindOf(collection)) return getQqListTracks(collection, limit, offset);
+    if (collection && qqListKindOf(collection)) {
+        const result = await getQqListTracks(collection, limit, offset);
+        noteLibraryStep('qq', 'collection:list-tracks', {
+            id: String(id), kind: qqListKindOf(collection), offset, items: result.items.length,
+        });
+        return result;
+    }
     const safeLimit = Math.max(1, limit);
     const safeOffset = Math.max(0, offset);
     const dirId = Number(collection?.providerData?.dirId);
@@ -801,6 +828,12 @@ const checkLogin = async (key: string): Promise<LoginState> => {
             return { state: 'error', message: describeCheckAnswer(response), failure: qqCheckFailure(response) };
         }
         return { state: 'expired' };
+    }
+    // 801/802/803/800 之外的终态错误码（安卓内置桥的换票失败回 0）：带着设备超限的
+    // upstreamCode（20279，appLogin.js 原样上交）时同样归成 device-limit，登录窗口
+    // 换成清理登录设备的步骤，而不是让用户对一句「平台拒绝」无从下手。
+    if (await isQqDeviceLimit(response)) {
+        return { state: 'error', message: describeCheckAnswer(response), failure: { ...qqCheckFailure(response), case: 'device-limit' } };
     }
     return { state: 'error', message: describeCheckAnswer(response), failure: qqCheckFailure(response) };
 };

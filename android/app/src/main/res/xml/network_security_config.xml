@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  当前文件：控制 App（含 WebView）能不能发明文 http 请求。
+
+  targetSdk 28+ 起明文默认是关的，被拦时 WebView 拿到的不是「连不上」而是
+  `ERR_CLEARTEXT_NOT_PERMITTED`，音频元素的表现是
+  `networkState=3 / mediaErrorCode=4 (MEDIA_ERR_SRC_NOT_SUPPORTED)`，
+  看起来像「格式不支持」—— 很容易误判成链接失效或音频坏了。
+
+  为什么 base 是「放开」：网易云的播放地址是 http（m7*.music.126.net 这类主机，且会变），
+  按**字面量域名**逐个白名单追不上；放行只意味着「允许」，WebView 仍然 https 优先，
+  只有上游真的回了 http 地址时才会走明文。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <!--
+      本机回环：日后本地音频若经原生小服务以 http 喂回 WebView，明文是唯一选择，
+      放行它不涉及任何外部流量。
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+    </domain-config>
+    <!-- 已知确实需要明文的媒体源：网易云的音频 CDN。base 已放开，这里留作记录。 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">music.126.net</domain>
+    </domain-config>
+</network-security-config>

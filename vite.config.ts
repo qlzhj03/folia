@@ -132,6 +132,19 @@ function devLyricProxyPlugin() {
 }
 
 export default async function viteConfig(_config: ConfigEnv): Promise<UserConfig> {
+  const isCapacitorBuild = process.env.FOLIA_BUILD_TARGET === 'capacitor';
+  // 本地登录：Android 包把已接入音源的 API 基址写成哨兵值 `extension`，请求交给内置在
+  // App 里的接口代码（src/nativeBridge/api/*）+ 原生 OkHttp，不再依赖任何外部服务器。
+  // 写在配置里而不是 .env 里，是因为 .env.local 是给网页/桌面用的服务器地址，
+  // 而 process.env 在 Vite 的 env 解析里最后生效，能稳定覆盖它。
+  // VITE_FOLIA_API_BASE 保持不变：AI 主题与歌词代理确实还需要那个服务端。
+  // 只钉已接线的平台（网易云、QQ、酷狗）；波点接入它那一轮再加，否则登录行
+  // 会先于桥里的实现亮起来，点进去全是打不通的请求。
+  if (isCapacitorBuild) {
+    process.env.VITE_NETEASE_API_BASE = 'extension';
+    process.env.VITE_QQ_API_BASE = 'extension';
+    process.env.VITE_KUGOU_API_BASE = 'extension';
+  }
   let commitHash = '';
   if (process.env.VERCEL_GIT_COMMIT_SHA) {
     commitHash = process.env.VERCEL_GIT_COMMIT_SHA.substring(0, 7);
@@ -276,7 +289,10 @@ export default async function viteConfig(_config: ConfigEnv): Promise<UserConfig
       traditionalLocalePlugin(),
       icuFoliaDataPlugin(),
       react(),
-      VitePWA({
+      // 安卓包不带 PWA：全部资源内置在 APK 里，本来就离线可用；WebView 里的 Service
+      // Worker 只剩一个作用——升级装包后仍拿 precache 的旧资源供页面（SW 的更新是
+      // 「先旧后新」），表现为「重装了还是旧行为」。网页部署才需要它。
+      ...(isCapacitorBuild ? [] : [VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg'],
         devOptions: {
@@ -318,7 +334,7 @@ export default async function viteConfig(_config: ConfigEnv): Promise<UserConfig
             }
           ]
         }
-      })
+      })])
     ],
     define: {
       '__COMMIT_HASH__': JSON.stringify(commitHash + commitSuffix),

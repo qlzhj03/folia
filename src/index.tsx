@@ -3,6 +3,8 @@ import { installGlobalVisualizerFrameRateLimiter } from './utils/frameRateLimite
 import { installConsoleLogCapture } from './utils/consoleLogBuffer';
 import { installDebugModule } from './services/debug/debugModule';
 import { installMemorySampleFeed } from './services/debug/memorySamples';
+import { initCapacitorShell } from './services/capacitorShell';
+import { installNativeAndroidBridge } from './services/nativeAndroidBridge';
 // import { installCoverSizeAudit } from './services/debug/coverSizeSamples';
 // @ts-ignore
 globalThis.Buffer = Buffer;
@@ -21,5 +23,11 @@ installMemorySampleFeed();
 // observer or the rows it retains.
 // if (import.meta.env.DEV) installCoverSizeAudit();
 installGlobalVisualizerFrameRateLimiter();
+// Before bootstrap paints: in the Capacitor Android shell this adds viewport-fit=cover so the
+// WebView fills the whole screen (no native padding strip above). No-op in browsers and Electron.
+initCapacitorShell();
+// 本地登录的地基：把内置的接口代码挂到页面与原生之间。它是异步的（要 import 那份 JS），
+// 但装好之前页面发来的请求会被排队，装好后统一补发，所以不用 await。
+void installNativeAndroidBridge();
 
 void import('./bootstrap');

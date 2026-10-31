@@ -1,0 +1,90 @@
+name: Android Build
+
+on:
+  pull_request:
+    branches:
+      - android
+    paths:
+      - android/**
+      - capacitor.config.ts
+      - vite.config.ts
+      - package.json
+      - package-lock.json
+      - .github/workflows/android-build.yml
+  push:
+    branches:
+      - android
+    paths:
+      - android/**
+      - capacitor.config.ts
+      - vite.config.ts
+      - package.json
+      - package-lock.json
+      - .github/workflows/android-build.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # 与 pr-unit-tests 的 node_modules 缓存用同一个 key：Actions 缓存作用域按分支划分、
+      # 同分支上各 workflow 共读，PR 分支能直接读到 android 分支上落下的这份。
+      # 触发路径不含 src/**，web 源码改动由 pr-unit-tests 把关，这里只守安卓壳本身；
+      # 想要现成 APK 时用 workflow_dispatch 手动跑。
+      - name: Restore node_modules
+        id: node-modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: node-modules-ubuntu-latest-node24-${{ hashFiles('package-lock.json') }}
+
+      - name: Install dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
+        run: npm ci
+
+      - name: Install JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # 缓存 ~/.gradle（wrapper 发行包、依赖、构建缓存），key 默认覆盖所有 gradle 脚本与
+      # wrapper 版本；没有它每次都要全量下载依赖并重编 capacitor 两个模块。
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # dist（webDir）与 capacitor-cordova-android-plugins 都不入库：先 vite build 出 web
+      # 产物，再 cap sync 拷进 android 工程、生成 cordova 插件模块，gradle 工程才完整。
+      - name: Build web assets and sync into the Android project
+        run: npm run cap:sync
+
+      # release 没配签名，assembleRelease 产出未签名 APK，仅作为 release 变体的编译验证，不上传。
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew --stacktrace assembleDebug assembleRelease
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: folia-android-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

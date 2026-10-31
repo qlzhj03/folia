@@ -20,6 +20,9 @@
     "dev:probe": "vite --open /dev-probe.html",
     "build": "npm run build:vercel-api && vite build",
     "build:vercel-api": "tsc -p api-ts/tsconfig.json",
+    "cap:sync": "npm run build:capacitor && npx cap sync android",
+    "build:capacitor": "cross-env FOLIA_BUILD_TARGET=capacitor vite build",
+    "cap:android": "npx cap open android",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "codemap": "node dev/mcp/ts-code-map/codemap.mjs",
@@ -244,6 +247,8 @@
     }
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
     "@google/genai": "^2.24.0",
     "@neteasecloudmusicapienhanced/api": "4.41.1",
     "@xhayper/discord-rpc": "^1.5.1",
@@ -252,6 +257,7 @@
     "bgutils-js": "4.0.3",
     "bodian-music-api": "0.1.2",
     "busboy": "^1.6.0",
+    "crypto-js": "4.2.0",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.8.9",
     "fflate": "^0.8.3",
@@ -266,6 +272,7 @@
   },
   "devDependencies": {
     "@applemusic-like-lyrics/ttml": "^1.0.1",
+    "@capacitor/cli": "^8.6.0",
     "@chenglou/pretext": "^0.0.9",
     "@emnapi/core": "1.11.3",
     "@emnapi/runtime": "1.11.3",
