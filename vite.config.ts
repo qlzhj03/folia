@@ -5,6 +5,7 @@ import react from '@vitejs/plugin-react';
 import { commandPinyinPlugin } from './dev/pinyin/commandPinyinPlugin.mjs';
 import { traditionalLocalePlugin } from './dev/i18n/traditionalLocalePlugin.mjs';
 import { icuFoliaDataPlugin } from './dev/icuFolia/icuFoliaDataPlugin.mjs';
+import { nebbiaStrokesPlugin } from './dev/nebbia/nebbiaStrokesPlugin.mjs';
 import { normalizeBuildCommit, resolveBuildKind, resolveBuildRepo, resolveDevBuildKindOverride } from './dev/build/buildIdentity.mjs';
 import { VitePWA } from 'vite-plugin-pwa';
 import { execSync } from 'child_process';
@@ -288,6 +289,7 @@ export default async function viteConfig(_config: ConfigEnv): Promise<UserConfig
       commandPinyinPlugin(),
       traditionalLocalePlugin(),
       icuFoliaDataPlugin(),
+      nebbiaStrokesPlugin(),
       react(),
       // 安卓包不带 PWA：全部资源内置在 APK 里，本来就离线可用；WebView 里的 Service
       // Worker 只剩一个作用——升级装包后仍拿 precache 的旧资源供页面（SW 的更新是
