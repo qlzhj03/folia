@@ -11,24 +11,20 @@ on:
       - package.json
       - package-lock.json
       - .github/workflows/android-build.yml
+  # android 分支的每次 push（含 PR 合并）都会构建并更新滚动预发布 release（tag: android-ci，prerelease）。
+  # 不设 paths 过滤：web 源码同样打进 APK，漏判会发出发旧代码的包，文档类提交也跟着多出一次构建。
   push:
     branches:
       - android
-    paths:
-      - android/**
-      - capacitor.config.ts
-      - vite.config.ts
-      - package.json
-      - package-lock.json
-      - .github/workflows/android-build.yml
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# 新 push 会取消还在跑的旧 push 构建：滚动 release 只认最新一版，排着队的旧构建没有意义。
 concurrency:
   group: android-build-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   build-apk:
@@ -47,8 +43,7 @@ jobs:
 
       # 与 pr-unit-tests 的 node_modules 缓存用同一个 key：Actions 缓存作用域按分支划分、
       # 同分支上各 workflow 共读，PR 分支能直接读到 android 分支上落下的这份。
-      # 触发路径不含 src/**，web 源码改动由 pr-unit-tests 把关，这里只守安卓壳本身；
-      # 想要现成 APK 时用 workflow_dispatch 手动跑。
+      # PR 构建只守安卓壳本身的编译（web 源码改动由 pr-unit-tests 把关）；push 构建发滚动预发布。
       - name: Restore node_modules
         id: node-modules
         uses: actions/cache@v4
@@ -76,15 +71,93 @@ jobs:
       - name: Build web assets and sync into the Android project
         run: npm run cap:sync
 
-      # release 没配签名，assembleRelease 产出未签名 APK，仅作为 release 变体的编译验证，不上传。
+      # 正式签名：secrets 里的 base64 keystore 解码到 runner 临时目录，经环境变量传给 gradle
+      # （读取逻辑见 android/app/build.gradle）。secrets 缺失直接失败：宁可不出包，不发 debug 签名的包。
+      - name: Restore release signing material
+        env:
+          ANDROID_RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_RELEASE_KEYSTORE_B64}" ]; then
+            echo "::error::Release signing secrets (ANDROID_RELEASE_KEYSTORE etc.) are not configured on this repository."
+            exit 1
+          fi
+          KEYSTORE_PATH="${RUNNER_TEMP}/folia-release.keystore"
+          printf '%s' "${ANDROID_RELEASE_KEYSTORE_B64}" | base64 -d > "${KEYSTORE_PATH}"
+          {
+            echo "ANDROID_RELEASE_STORE_FILE=${KEYSTORE_PATH}"
+            echo "ANDROID_RELEASE_STORE_PASSWORD=${ANDROID_RELEASE_STORE_PASSWORD}"
+            echo "ANDROID_RELEASE_KEY_ALIAS=${ANDROID_RELEASE_KEY_ALIAS}"
+            echo "ANDROID_RELEASE_KEY_PASSWORD=${ANDROID_RELEASE_KEY_PASSWORD}"
+          } >> "$GITHUB_ENV"
+
+      # 版本号取 package.json，经 -PfoliaVersionName 传给 gradle（见 android/app/build.gradle）。
+      - name: Derive app version from package.json
+        run: echo "FOLIA_VERSION=$(jq -r .version package.json)" >> "$GITHUB_ENV"
+
+      # CI 只构建 release 变体（正式签名，见上一步与 build.gradle），它就是预发布渠道的发布产物。
       - name: Build APK
         working-directory: android
-        run: ./gradlew --stacktrace assembleDebug assembleRelease
+        run: ./gradlew --stacktrace "-PfoliaVersionName=${FOLIA_VERSION}" assembleRelease
 
-      - name: Upload debug APK
+      - name: Upload signed release APK
         uses: actions/upload-artifact@v6
         with:
-          name: folia-android-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: folia-android-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 14
+
+  # push 到 android 才发布：整体替换滚动 release（先删 release 和 tag 再重建），PR 构建只出 artifact。
+  # 在 android 分支上手动 dispatch 也能补发（release 丢失或发布 job 挂掉后）。
+  # tag 不与分支同名（android-ci），避免新克隆 git checkout android 落在滚动的 tag 上；
+  # 固定的 tag 和资源名让下载地址不变：releases/download/android-ci/folia-android.apk。
+  publish-release:
+    name: Publish rolling Android pre-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: build-apk
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref_name == 'android')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v6
+
+      - name: Download signed release APK
+        uses: actions/download-artifact@v7
+        with:
+          name: folia-android-release-apk
+          path: apk
+
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="android-ci"
+          VERSION="$(jq -r .version package.json)"
+          mv apk/app-release.apk folia-android.apk
+          COMMIT_URL="https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          PUBLISHED_AT="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          cat > release-notes.md <<EOF
+          Folia Android 预发布构建，android 分支每次 push 都会整体替换这个 release。
+
+          Version: ${VERSION}
+          Source commit: ${COMMIT_URL}
+          Published at: ${PUBLISHED_AT}
+
+          下载 folia-android.apk 直接覆盖安装。首次从旧的 debug 签名包升级需要卸载重装一次，之后的各版本之间可以无缝覆盖。
+          EOF
+          gh release delete "${TAG}" --repo "${GITHUB_REPOSITORY}" --yes >/dev/null 2>&1 || true
+          gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" >/dev/null 2>&1 || true
+          gh release create "${TAG}" "folia-android.apk#Folia Android pre-release (${VERSION})" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Folia Android 预发布 (${VERSION})" \
+            --notes-file release-notes.md \
+            --target "${GITHUB_SHA}" \
+            --prerelease
