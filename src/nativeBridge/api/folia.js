@@ -1,5 +1,5 @@
 // 内置桥的调度器：页面侧发来的 FOLIA_API_REQUEST 在这里按 provider 分发到各平台的实现。
-// 当前带网易云与 QQ（三条扫码通道都在）；酷狗 / 波点接入时各加一个 provider 分支与
+// 当前带网易云、QQ（三条扫码通道都在）与酷狗；波点接入时再加一个 provider 分支与
 // 各自目录下的实现文件即可（上游 folia-sonnet 的同名文件是全量版）。
 
 import { eapiRequest } from './eapi.js';
@@ -64,6 +64,34 @@ import {
   qqAppCancelLoginQr,
 } from './qq/appLogin.js';
 import { clearQQPlatformSessionCookies } from './qq-login-qr.js';
+import {
+  claimKGYouthDayVip,
+  ensureKGCookie,
+  getKGYouthUnionVip,
+  getKGLoginStatus,
+  getKGUserVipDetail,
+  handleKGArtistDetail,
+  handleKGEverydayHistory,
+  handleKGEverydayRecommend,
+  handleKGLoginQrCheck,
+  handleKGLoginQrCreate,
+  handleKGLoginQrKey,
+  handleKGLyric,
+  handleKGPersonalFm,
+  handleKGPlaylistTracks,
+  handleKGSearch,
+  handleKGTopCardYouth,
+  handleKGSongUrl,
+  handleKGUserPlaylists,
+  searchKGLyricCandidates,
+  downloadKGLyricByCandidate,
+  kgPostAndroidSigned,
+  upgradeKGYouthDayVip,
+  handlePlaylistAdd,
+  handlePlaylistDel,
+  handlePlaylistTracksAdd,
+  handlePlaylistTracksDel,
+} from './kugou.js';
 import {
   getLoginInfo,
   handleLoginQrCheck,
@@ -276,6 +304,29 @@ function qqPlaylistRow(item) {
     picUrl: item?.cover || '',
     dirShow: 1,
     subscribed: !!item?.subscribed,
+  };
+}
+
+function kgCollectionRow(item) {
+  const data = item?.providerData || {};
+  return {
+    listid: data.listId || item?.id,
+    list_id: data.listId || item?.id,
+    global_collection_id: data.globalCollectionId || item?.id,
+    specialid: data.specialId,
+    name: item?.name || '',
+    listname: item?.name || '',
+    song_count: item?.trackCount,
+    count: item?.trackCount,
+    img: item?.coverUrl || '',
+    cover: item?.coverUrl || '',
+    type: item?.type === 'album' ? 1 : 0,
+    source: item?.type === 'album' ? 2 : 1,
+    is_pri: item?.isOwned ? 0 : 1,
+    create_userid: data.creatorUserId,
+    list_create_userid: data.creatorUserId,
+    list_create_listid: data.creatorListId,
+    list_create_gid: data.creatorGid,
   };
 }
 
@@ -1195,10 +1246,294 @@ async function routeFoliaQqRequest(operation, params, segments, url, cookie) {
   };
 }
 
+async function handleFoliaKugouRequest(input, url) {
+  const operation = String(input.operation || url.pathname);
+  const params = mergeOperationParams(input, url);
+  const cookie = await ensureKGCookie();
+
+  if (operation === 'register_dev') {
+    return { status: 1, error_code: 0, data: { dfid: params.dfid || '' } };
+  }
+  if (operation === 'login_qr_key') return await handleKGLoginQrKey();
+  if (operation === 'login_qr_create') {
+    return await handleKGLoginQrCreate(firstValue(params.key, params.qrcode));
+  }
+  if (operation === 'login_qr_check') {
+    return await handleKGLoginQrCheck(firstValue(params.key, params.qrcode));
+  }
+  if (operation === 'logout') {
+    return { status: 1, error_code: 0, code: 200 };
+  }
+  if (operation === 'user_detail') {
+    const info = await getKGLoginStatus(cookie);
+    return {
+      status: 1,
+      error_code: 0,
+      data: {
+        user_info: {
+          userid: info?.userId || info?.userid || '',
+          nickname: info?.nickname || '',
+          pic: info?.avatar || info?.avatarUrl || '',
+          vip_type: info?.vipType || 0,
+        },
+      },
+    };
+  }
+  if (operation === 'user_vip_detail') {
+    return await getKGUserVipDetail(cookie);
+  }
+  if (operation === 'search') {
+    const limit = numberValue(params.pagesize, params.limit, 16);
+    const page = numberValue(params.page, 1);
+    const songs = await handleKGSearch(
+      firstValue(params.keywords, params.keyword),
+      limit,
+      cookie,
+      page,
+    );
+    return { status: 1, error_code: 0, data: { lists: songs, total: songs.length } };
+  }
+  if (operation === 'audio' || operation === 'krm_audio') {
+    const hash = String(firstValue(params.hash, params.id)).toLowerCase();
+    const info = await handleKGSongUrl(hash, params.album_id, params.album_audio_id, 'standard', cookie, {});
+    return {
+      status: 1,
+      error_code: 0,
+      data: {
+        hash,
+        FileHash: hash,
+        url: info?.url || '',
+        play_url: info?.url || '',
+      },
+    };
+  }
+  if (operation === 'song_url' || operation === 'user_cloud_url') {
+    const result = await handleKGSongUrl(
+      firstValue(params.hash, params.id),
+      params.album_id,
+      params.album_audio_id,
+      params.quality,
+      cookie,
+      {
+        hash320: params.hash320 || params.hash_320,
+        hashSq: params.hashSq || params.hash_sq || params.sqhash,
+      },
+    );
+    return {
+      status: 1,
+      error_code: result?.url ? 0 : 20027,
+      data: {
+        play_url: result?.url || '',
+        url: result?.url || '',
+        level: result?.level || 'standard',
+        volume: 0,
+      },
+      ...result,
+    };
+  }
+  if (operation === 'search_lyric') {
+    const candidates = await searchKGLyricCandidates(
+      firstValue(params.hash, params.id),
+      params.album_audio_id,
+      numberValue(params.duration, 0),
+      params.keyword || params.keywords || '',
+    );
+    return { status: 1, error_code: 0, candidates };
+  }
+  if (operation === 'lyric') {
+    const content = await downloadKGLyricByCandidate({
+      id: firstValue(params.id, params.lyric_id),
+      accesskey: params.accesskey,
+    });
+    return { status: 1, error_code: 0, decodeContent: content, content };
+  }
+  if (operation === 'song_climax') {
+    return { status: 1, error_code: 0, data: [] };
+  }
+  if (operation === 'user_playlist') {
+    const result = await handleKGUserPlaylists(cookie, numberValue(params.pagesize, 100));
+    const lists = (result?.playlists || []).map(kgCollectionRow);
+    return {
+      status: 1,
+      error_code: 0,
+      data: { lists, total: lists.length, count: lists.length },
+    };
+  }
+  if (operation === 'playlist_track_all') {
+    const result = await handleKGPlaylistTracks(
+      firstValue(params.id, params.global_collection_id),
+      cookie,
+      params.globalCollectionId,
+    );
+    const songs = result?.songs || result?.tracks || [];
+    return {
+      status: 1,
+      error_code: 0,
+      data: { songs, info: songs, total: songs.length, count: songs.length },
+    };
+  }
+  if (operation === 'playlist_detail') {
+    const result = await handleKGPlaylistTracks(firstValue(params.ids, params.id), cookie);
+    const playlist = result?.playlist || {};
+    const row = {
+      listid: playlist.id,
+      list_id: playlist.id,
+      global_collection_id: playlist.id,
+      name: playlist.name,
+      listname: playlist.name,
+      song_count: playlist.trackCount,
+      count: playlist.trackCount,
+      img: playlist.cover,
+      cover: playlist.cover,
+    };
+    return { status: 1, error_code: 0, data: { info: [row], list: [row], ...row } };
+  }
+  if (operation === 'album_detail') {
+    const id = firstValue(params.id, params.album_id);
+    const body = await kgPostAndroidSigned(
+      'https://openapi.kugou.com',
+      '/kmr/v2/albums',
+      cookie,
+      {
+        data: [{ album_id: String(id) }],
+        is_buy: numberValue(params.is_buy, 0),
+        fields: 'album_id,album_name,publish_date,sizable_cover,intro,language,is_publish,heat,type,quality,authors,exclusive,author_name,trans_param',
+      },
+      {},
+      { 'x-router': 'openapi.kugou.com', 'kg-tid': '255' },
+    );
+    // `kgPostAndroidSigned` 没有 userid / token 时返回 null（这条端点要带账号签名）。
+    // 以前这里拿 20017 的空壳顶上，界面上就成了「这张专辑没有歌」—— 现在把原因写进 errmsg。
+    return body || { status: 0, error_code: 20017, errmsg: 'album detail needs a signed-in account', data: { info: [], list: [] } };
+  }
+  if (operation === 'album_songs') {
+    const id = firstValue(params.id, params.album_id);
+    const body = await kgPostAndroidSigned(
+      'https://openapi.kugou.com',
+      '/v1/album_audio/lite',
+      cookie,
+      {
+        album_id: String(id),
+        is_buy: firstValue(params.is_buy, ''),
+        page: numberValue(params.page, 1),
+        pagesize: numberValue(params.pagesize, 30),
+      },
+      {},
+      { 'x-router': 'openapi.kugou.com', 'kg-tid': '255' },
+    );
+    // 同上：签不出名（没登录）就明说，不要伪装成「这张专辑没有歌」。
+    return body || { status: 0, error_code: 20017, errmsg: 'album songs need a signed-in account', data: { info: [], list: [], songs: [], total: 0 } };
+  }
+  if (operation === 'artist_albums') {
+    const id = firstValue(params.id, params.author_id);
+    const body = await kgPostAndroidSigned(
+      'https://openapi.kugou.com',
+      '/kmr/v1/author/albums',
+      cookie,
+      {
+        author_id: String(id),
+        pagesize: numberValue(params.pagesize, 30),
+        page: numberValue(params.page, 1),
+        sort: 1,
+        category: 1,
+        area_code: 'all',
+      },
+      {},
+      { 'x-router': 'openapi.kugou.com', 'kg-tid': '36' },
+    );
+    return body || { status: 0, error_code: 20017, data: { info: [], list: [], total: 0 } };
+  }
+  if (operation === 'artist_detail' || operation === 'artist_audios') {
+    const result = await handleKGArtistDetail(
+      firstValue(params.id, params.singerid),
+      params.name,
+      numberValue(params.pagesize, params.limit, 36),
+    );
+    if (operation === 'artist_detail') {
+      return { status: 1, error_code: 0, data: result?.artist || {} };
+    }
+    const items = result?.songs || [];
+    return {
+      status: 1,
+      error_code: 0,
+      data: { info: items, list: items, songs: items, total: items.length },
+    };
+  }
+  // 推荐类接口以前这里是直接返回空数组，UI 上就表现为「私人 FM / 每日推荐没有歌」。
+  // 现在都真的去打酷狗的推荐服务；拿不到（没登录 / 被风控）时再退化成空列表，至少不会报错。
+  if (operation === 'everyday_recommend') {
+    const body = await handleKGEverydayRecommend(cookie, params.platform);
+    return body || { status: 1, error_code: 0, data: { songs: [], total: 0 } };
+  }
+  if (operation === 'personal_fm') {
+    const body = await handleKGPersonalFm(cookie, {
+      action: params.action,
+      hash: params.hash,
+      songid: params.songid,
+      playtime: params.playtime,
+      mode: params.mode,
+      song_pool_id: params.song_pool_id,
+      is_overplay: params.is_overplay,
+      remain_songcnt: params.remain_songcnt,
+      platform: params.platform,
+    });
+    return body || { status: 1, error_code: 0, data: { songs: [], total: 0 } };
+  }
+  if (operation === 'top_card_youth') {
+    const body = await handleKGTopCardYouth(cookie, {
+      card_id: params.card_id,
+      pagesize: params.pagesize,
+      tagid: params.tagid,
+    });
+    return body || { status: 1, error_code: 0, data: { songs: [], total: 0 } };
+  }
+  if (operation === 'everyday_history') {
+    const body = await handleKGEverydayHistory(cookie, {
+      mode: params.mode,
+      date: params.date,
+      history_name: params.history_name,
+      platform: params.platform,
+    });
+    return body || { status: 1, error_code: 0, data: { info: [], list: [], total: 0 } };
+  }
+  if (operation === 'user_cloud') {
+    return { status: 1, error_code: 0, data: { info: [], songs: [], total: 0 } };
+  }
+  if (operation === 'youth_union_vip') return await getKGYouthUnionVip(cookie);
+  if (operation === 'youth_day_vip') return await claimKGYouthDayVip(cookie, params.receive_day);
+  if (operation === 'youth_day_vip_upgrade') {
+    return await upgradeKGYouthDayVip(cookie, firstValue(params.userid, params.kugouid));
+  }
+
+  // ---- 歌单的写入：收藏 / 取消收藏歌单与专辑，往歌单加歌、从歌单删歌 ----
+  if (operation === 'playlist_add') {
+    return await handlePlaylistAdd(params, cookie);
+  }
+  if (operation === 'playlist_del') {
+    return await handlePlaylistDel(params, cookie);
+  }
+  if (operation === 'playlist_tracks_add') {
+    return await handlePlaylistTracksAdd(params, cookie);
+  }
+  if (operation === 'playlist_tracks_del') {
+    return await handlePlaylistTracksDel(params, cookie);
+  }
+
+  return {
+    __foliaBridgeError: 'UNSUPPORTED',
+    provider: 'kugou',
+    operation,
+    message: `Folia KuGou bridge does not implement ${operation}`,
+  };
+}
+
 export async function handleFoliaApiRequest(input) {
   const { url, body, method } = parseInput(input);
   if (input?.provider === 'qq') {
     return await handleFoliaQqRequest(input, url);
+  }
+  if (input?.provider === 'kugou') {
+    return await handleFoliaKugouRequest(input, url);
   }
   if (input?.provider === 'qq_raw') {
     if (input.operation !== 'musicu') {
@@ -1396,4 +1731,161 @@ export async function getFoliaBridgeStatus() {
       hasCookie: hasNeteaseLogin(cookie),
     },
   };
+}
+
+export async function diagnoseQqLikedSongs() {
+  const cookie = await getQQCookie();
+  const cookieObject = parseCookieString(cookie);
+  const uin = qqCookieUin(cookie);
+  const report = {
+    hasUin: Boolean(uin),
+    hasMusicKey: Boolean(cookieObject.qm_keyst || cookieObject.qqmusic_key || cookieObject.music_key),
+    steps: [],
+  };
+
+  try {
+    const fav = await qqGetJSON('https://c.y.qq.com/splcloud/fcgi-bin/fcg_musiclist_getmyfav.fcg', {
+      dirid: 201,
+      dirinfo: 1,
+      g_tk: qqGtk(cookie),
+      format: 'json',
+      loginUin: uin,
+      hostUin: uin,
+    }, cookie);
+    const midMap = fav?.mapmid || fav?.data?.mapmid || {};
+    const idMap = fav?.map || fav?.data?.map || {};
+    report.steps.push({
+      name: 'getmyfav',
+      code: fav?.code,
+      subcode: fav?.subcode,
+      topKeys: Object.keys(fav || {}).slice(0, 30),
+      midCount: Object.keys(midMap || {}).length,
+      idCount: Object.keys(idMap || {}).length,
+      sampleMids: Object.keys(midMap || {}).slice(0, 3),
+    });
+  } catch (error) {
+    report.steps.push({ name: 'getmyfav', error: error?.message || String(error) });
+  }
+
+  try {
+    const encryptedUin = firstValue(
+      cookieObject.encryptUin,
+      cookieObject.encrypt_uin,
+      cookieObject.str_musicid,
+      cookieObject.wxuin,
+      uin,
+    );
+    const json = await qqMusicRequest({
+      comm: buildQQAuthComm(cookie),
+      req_0: {
+        module: 'music.srfDissInfo.DissInfo',
+        method: 'CgiGetDiss',
+        param: {
+          disstid: 0,
+          dirid: 201,
+          tag: true,
+          song_begin: 0,
+          song_num: 5,
+          userinfo: true,
+          orderlist: true,
+          enc_host_uin: String(encryptedUin || ''),
+        },
+      },
+    }, cookie);
+    const block = json?.req_0 || {};
+    const data = block.data || {};
+    const songs = data.songlist || data.songList || [];
+    report.steps.push({
+      name: 'cgiGetDiss',
+      code: block.code,
+      subcode: block.subcode,
+      dataKeys: Object.keys(data).slice(0, 30),
+      songlistCount: Array.isArray(songs) ? songs.length : 0,
+      total: numberValue(data.total_song_num, data.total, data.song_num, 0),
+      sampleSongKeys: Array.isArray(songs) && songs[0] ? Object.keys(songs[0]).slice(0, 20) : [],
+    });
+  } catch (error) {
+    report.steps.push({ name: 'cgiGetDiss', error: error?.message || String(error) });
+  }
+
+  try {
+    const json = await qqMusicRequest({
+      comm: buildQQAuthComm(cookie),
+      req_0: {
+        module: 'music.musicasset.PlaylistFavRead',
+        method: 'GetSongList',
+        param: {
+          dirId: 201,
+          uin: Number(uin) || uin,
+          order: 1,
+          begin: 0,
+          num: 5,
+        },
+      },
+    }, cookie);
+    const block = json?.req_0 || {};
+    const data = block.data || {};
+    const songs = data.songlist || data.songList || data.list || [];
+    report.steps.push({
+      name: 'playlistFavRead',
+      code: block.code,
+      subcode: block.subcode,
+      dataKeys: Object.keys(data).slice(0, 30),
+      songlistCount: Array.isArray(songs) ? songs.length : 0,
+      total: numberValue(data.total, data.total_song_num, data.totalSongNum, 0),
+      sampleSongKeys: Array.isArray(songs) && songs[0] ? Object.keys(songs[0]).slice(0, 20) : [],
+    });
+  } catch (error) {
+    report.steps.push({ name: 'playlistFavRead', error: error?.message || String(error) });
+  }
+
+  try {
+    const json = await qqGetJSON('https://c.y.qq.com/fav/fcgi-bin/fcg_get_profile_order_asset.fcg', {
+      ct: 20,
+      cid: 205360956,
+      userid: uin,
+      reqtype: 2,
+      sin: 0,
+      ein: 4,
+      format: 'json',
+    }, cookie);
+    const data = json?.data || json || {};
+    const albums = data.albumlist || data.cdlist || data.list || data.albums || [];
+    const firstAlbum = Array.isArray(albums) ? albums[0] : null;
+    report.steps.push({
+      name: 'favoriteAlbums',
+      code: json?.code,
+      subcode: json?.subcode,
+      dataKeys: Object.keys(data).slice(0, 30),
+      albumCount: Array.isArray(albums) ? albums.length : 0,
+      total: numberValue(data.totalalbum, data.total_album, data.total, data.album_total, 0),
+      sampleAlbumKeys: Array.isArray(albums) && albums[0] ? Object.keys(albums[0]).slice(0, 20) : [],
+    });
+    const firstAlbumMid = firstValue(
+      firstAlbum?.albumMID,
+      firstAlbum?.albummid,
+      firstAlbum?.albumMid,
+      firstAlbum?.mid,
+    );
+    if (firstAlbumMid) {
+      const detail = await qqGetJSON(
+        'https://c.y.qq.com/v8/fcg-bin/fcg_v8_album_info_cp.fcg',
+        { albummid: firstAlbumMid, format: 'json', outCharset: 'utf-8' },
+        cookie,
+      );
+      const detailData = detail?.data || {};
+      report.steps.push({
+        name: 'favoriteAlbumDetail',
+        code: detail?.code,
+        albumMid: firstAlbumMid,
+        albumName: detailData.name,
+        dataKeys: Object.keys(detailData).slice(0, 30),
+        trackCount: Array.isArray(detailData.list) ? detailData.list.length : 0,
+      });
+    }
+  } catch (error) {
+    report.steps.push({ name: 'favoriteAlbums', error: error?.message || String(error) });
+  }
+
+  return report;
 }

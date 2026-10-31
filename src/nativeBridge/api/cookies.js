@@ -568,7 +568,7 @@ export function analyzeKGCookieSession(cookieHeader) {
 
 export function kgCookieLoginPwd(cookieHeader) {
   const obj = parseKGCookieObject(cookieHeader);
-  return String(obj.KugooPwd || obj.kugou_pwd || obj.pwd || '').trim();
+  return String(obj.KugooPwd || obj.kugoo_pwd || obj.pwd || '').trim();
 }
 
 export function kgCookieVipToken(cookieHeader) {

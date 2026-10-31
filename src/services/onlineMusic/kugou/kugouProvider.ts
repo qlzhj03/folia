@@ -13,7 +13,8 @@ import {
     type ProviderUser,
 } from '../../../types/onlineMusic';
 import { getSizedCoverUrl } from '../../../utils/coverUrl';
-import { parseLyricsByFormat } from '../../../utils/lyrics/parserCore';
+import { parseLyricsByFormat, type LyricParseFormat } from '../../../utils/lyrics/parserCore';
+import { detectNonTtmlTimedLyricFormat } from '../../../utils/lyrics/formatDetection';
 import { isPureMusicLyricText } from '../../../utils/lyrics/pureMusic';
 import { hasRenderableLyrics } from '../../../utils/lyrics/validity';
 import { getPlaybackSongKey } from '../../../utils/appPlaybackGuards';
@@ -35,6 +36,7 @@ import {
 import { describeKugouLoginFailure, kugouCheckFailure } from './kugouLoginFailure';
 import { describeKugouFailure, isKugouTimeout, kugouNoUrlError } from './kugouFailure';
 import { errorFields } from '../../../utils/errorText';
+import { noteLibraryStep } from '../../../nativeBridge/api/libraryTrace.js';
 
 // src/services/onlineMusic/kugou/kugouProvider.ts
 
@@ -167,22 +169,97 @@ const catalogRef = (
         : undefined
 );
 
-const normalizeArtists = (raw: any) => {
-    const singers = valueOf(raw, 'Singers', 'singers', 'singerinfo', 'authors', 'artists');
-    const usesSingerInfo = singers === raw?.singerinfo;
-    if (Array.isArray(singers)) {
-        return singers.map((artist: any, index: number) => {
-            const base = artist?.base ?? artist;
-            const authorId = valueOf(base, 'author_id', 'authorId')
-                ?? (usesSingerInfo ? valueOf(base, 'id') : undefined);
-            return {
-                id: authorId ?? `kugou-artist-${index}`,
-                name: String(valueOf(base, 'name', 'author_name', 'singername') || ''),
-                ...(catalogRef('artist', authorId) ? { catalogRef: catalogRef('artist', authorId) } : {}),
-            };
-        }).filter(artist => artist.name);
+// 歌手字段各家接口写法不一：数组里的元素可能是字符串、对象，还可能再被包一层（base / singer）。
+// 取名字时逐键试到有**真值**为止 —— 只判「非 undefined」的话，一个空字符串就会把后面的键挡住。
+const KUGOU_ARTIST_ARRAY_KEYS = [
+    'authors', 'artists', 'singerinfo', 'SingerList', 'singer_list',
+    'Singers', 'singers', 'artist_list', 'author_list', 'artistList',
+] as const;
+
+const KUGOU_ARTIST_NAME_KEYS = [
+    'author_name', 'authorName', 'singername', 'singerName', 'singer_name', 'name', 'nickname',
+] as const;
+
+const KUGOU_ARTIST_ID_KEYS = ['author_id', 'authorId', 'singerid', 'singer_id', 'id'] as const;
+
+const kugouArtistBaseOf = (entry: any): any => {
+    if (!entry || typeof entry !== 'object') return null;
+    if (entry.base && typeof entry.base === 'object') return entry.base;
+    if (entry.singer && typeof entry.singer === 'object') return entry.singer;
+    return entry;
+};
+
+const kugouArtistNameOf = (entry: any): string => {
+    if (typeof entry === 'string') return entry.trim();
+    const base = kugouArtistBaseOf(entry);
+    if (!base) return '';
+    for (const key of KUGOU_ARTIST_NAME_KEYS) {
+        const text = base[key];
+        if (typeof text === 'string' && text.trim()) return text.trim();
     }
-    const names = String(valueOf(raw, 'SingerName', 'singername', 'author_name', 'Singer') || '')
+    return '';
+};
+
+/**
+ * 歌手 id。
+ *
+ * `allowGenericId` 只对 `singerinfo` 为真：那一类的 `id` 就是作者 id；
+ * 而 `Singers` 里的 `id` 语义不同，老实现刻意不用它，这里保持一致（否则会把歌手的
+ * 内部序号当成作者 id，挂上一条指错的 catalogRef）。
+ */
+const kugouArtistIdOf = (entry: any, allowGenericId: boolean): MediaId | undefined => {
+    const base = kugouArtistBaseOf(entry);
+    if (!base) return undefined;
+    for (const key of KUGOU_ARTIST_ID_KEYS) {
+        if (key === 'id' && !allowGenericId) continue;
+        const value = base[key];
+        if (value !== undefined && value !== null && value !== '') return value as MediaId;
+    }
+    return undefined;
+};
+
+/**
+ * 顶层那个「单个歌手」字段，同样是逐键试真值。
+ *
+ * `artist` / `artist_name` 必须认：安卓端走的是内置桥（src/nativeBridge/api/kugou.js 的
+ * mapKGSong），它把歌手已经算好放在 `artist` 这一个字符串里，别的字段一律没有。漏掉它
+ * 的表现就是「酷狗的歌单全是未知歌手」，而别的歌单看着正常 —— 那些是从快照里读的老数据。
+ */
+const kugouArtistStringOf = (raw: any): string => {
+    for (const key of [
+        'SingerName', 'singername', 'singerName', 'singer_name', 'author_name', 'authorName',
+        'Singer', 'singer', 'artist_name', 'artistName', 'artist', 'album_artist', 'AlbumArtist',
+    ]) {
+        const text = raw?.[key];
+        if (typeof text === 'string' && text.trim()) return text.trim();
+    }
+    return '';
+};
+
+const normalizeArtists = (raw: any) => {
+    // 逐个候选试到有结果为止，而不是取第一个**非空**值：空数组（`authors: []`）同样是
+    // 「非空值」，会把后面真正带着歌手的字段整个挡住 —— 「别的歌单都有作者、只有这一路
+    // 全显示未知」就是这一类成因。
+    for (const key of KUGOU_ARTIST_ARRAY_KEYS) {
+        const value = raw?.[key];
+        if (value === undefined || value === null) continue;
+        const list = Array.isArray(value) ? value : [value];
+        const allowGenericId = key === 'singerinfo';
+        const artists = list
+            .map((entry, index) => {
+                const authorId = kugouArtistIdOf(entry, allowGenericId);
+                // 索引取的是过滤前的下标，和「歌手一 / 歌手二」的兜底 id 对得上。
+                const ref = catalogRef('artist', authorId);
+                return {
+                    id: authorId ?? `kugou-artist-${index}`,
+                    name: kugouArtistNameOf(entry),
+                    ...(ref ? { catalogRef: ref } : {}),
+                };
+            })
+            .filter(artist => artist.name);
+        if (artists.length > 0) return artists;
+    }
+    const names = kugouArtistStringOf(raw)
         .split(/[、,&/]/).map(name => name.trim()).filter(Boolean);
     return names.map((name, index) => ({ id: `kugou-artist-${index}-${name}`, name }));
 };
@@ -734,6 +811,22 @@ const getKugouChorusRanges = async (songId: MediaId): Promise<ChorusRange[]> => 
     return request;
 };
 
+// 解密过的 KRC，行首是 `[开始毫秒,时长毫秒]`（parseKRC 只认这一种）。
+const KG_DECRYPTED_KRC_LINE = /(?:^|\n)\s*\[\d+,\d+\]/;
+
+/**
+ * 桥（`lyric` 这个 operation）下载回来那段歌词，该按什么格式喂给 parseLyricsByFormat。
+ *
+ * 不能写死 'krc'：桥里没有 KRC 解密，downloadKGLyricByCandidate 向 lyrics.kugou.com/download
+ * 要的是 `fmt=lrc`，回来的 base64 解出来就是 LRC（`[00:00.00]…`），而 parseKRC 的行首正则认的是
+ * `[开始,时长]` —— 一行都匹配不上，lines 为 0，于是 hasRenderableLyrics 为假、界面上
+ * 「无可用歌词」，**而且每一首都是**（桥只会给这一种）。
+ * 所以先看它是不是解密过的 KRC（那种有逐字时间），不是就按内容探测（见 formatDetection）。
+ */
+export const resolveKugouLyricFormat = (lyricText: string): LyricParseFormat => (
+    KG_DECRYPTED_KRC_LINE.test(lyricText) ? 'krc' : detectNonTtmlTimedLyricFormat(lyricText)
+);
+
 const getKugouLyricCandidate = async (song: SongResult): Promise<any | null> => {
     const sourceRef = song.sourceRef?.kind === 'online' && song.sourceRef.providerId === 'kugou'
         ? song.sourceRef
@@ -770,11 +863,13 @@ const getKugouLyrics = async (song: SongResult) => {
     if (isPureMusicLyricText(lyricText)) {
         return { lyrics: null, mainText: lyricText, wordByWordText: lyricText, isPureMusic: true, chorusRanges: [] };
     }
-    const parsed = lyricText ? parseLyricsByFormat('krc', lyricText, '') : null;
+    const format = resolveKugouLyricFormat(lyricText);
+    const parsed = lyricText ? parseLyricsByFormat(format, lyricText, '') : null;
     if (!hasRenderableLyrics(parsed)) {
         return { lyrics: null, mainText: lyricText || null, wordByWordText: lyricText || null, isPureMusic: false, chorusRanges: [] };
     }
-    parsed.isWordByWord = true;
+    // 逐字是内容说了算：桥现在给的是 LRC（整行一条时间），不是它的时候就别声称有逐字。
+    parsed.isWordByWord = format === 'krc' || format === 'enhanced-lrc';
     const songId = song.kgHash ?? song.id;
     return {
         lyrics: parsed,
@@ -795,8 +890,30 @@ const getKugouUserPlaylistItems = async (userId: MediaId): Promise<any[]> => {
 };
 
 // Loads the raw album metadata needed by KuGou's playlist-based album subscription endpoint.
+/*
+ * 酷狗的回答不抛错：`status: 0` + 非 0 的 `error_code`（例如 20017）就是拒了这次读取，
+ * 而 `listOf()` 只看数组 —— 于是**读不出来**和**真的没有内容**在界面上是同一个样子：
+ * 一张专辑静默变成空列表，用户看到的是「这张专辑没有歌」而不是「读取失败」。
+ * 专辑这两条（详情、曲目）先看状态码：答失败就抛，宁可显示失败也不假报空。
+ */
+const throwIfKugouRefused = (response: unknown, what: string): void => {
+    const raw = response as any;
+    const data = dataOf(raw);
+    const status = Number(raw?.status ?? data?.status);
+    const code = Number(valueOf(raw, 'errcode', 'error_code') ?? valueOf(data, 'errcode', 'error_code') ?? NaN);
+    if (!(Number.isFinite(status) && status === 0 && Number.isFinite(code) && code !== 0)) return;
+    const said = String(valueOf(raw, 'errmsg', 'error_msg', 'msg', 'message') ?? '').trim();
+    throw new OnlineProviderError(
+        'unavailable',
+        said ? `KuGou refused ${what}: ${said} (error_code ${code})` : `KuGou refused ${what} (error_code ${code})`,
+        'kugou',
+        { errorCode: code, status, ...(said ? { message: said } : {}) },
+    );
+};
+
 const getKugouAlbumDetailRaw = async (id: MediaId): Promise<any | null> => {
     const response = await requestKugou('album_detail', { id: String(id) });
+    throwIfKugouRefused(response, 'the album detail');
     const data = dataOf(response);
     const rawAlbum = listOf(response)[0] ?? data?.album ?? data;
     return rawAlbum && typeof rawAlbum === 'object' && !Array.isArray(rawAlbum) ? rawAlbum : null;
@@ -976,8 +1093,20 @@ const getKugouPlaylistTrackSongs = async (
         );
     }
 
-    kugouLikedTrackCache.set(globalCollectionId, { fetchedAt: Date.now(), songs });
-    return songs;
+    // 酷狗的歌单/我喜欢接口给的是**倒着**的：与官方客户端里从上往下看到的顺序相反
+    // （照 RemnantCloudGodofWar/folia-android 的修法）。拼完页整体翻一次，翻完的那个数组
+    // 才进缓存 —— 不然第一次翻了、第二次从缓存拿的又是不翻的。
+    const clientOrderSongs = songs.length > 1 ? songs.slice().reverse() : songs;
+    if (songs.length > 1) {
+        noteLibraryStep('kugou', 'playlist:client-order', {
+            collection: globalCollectionId,
+            tracks: songs.length,
+            transform: 'reversed',
+            source: 'liked-or-mutation',
+        });
+    }
+    kugouLikedTrackCache.set(globalCollectionId, { fetchedAt: Date.now(), songs: clientOrderSongs });
+    return clientOrderSongs;
 };
 
 const removeKugouPlaylistTrackCacheEntry = (globalCollectionId: string, hash: string): void => {
@@ -1396,7 +1525,19 @@ export const kugouProvider: OnlineMusicProvider = {
 
             const requestLimit = Math.min(Math.max(1, limit), KUGOU_MAX_PAGE_SIZE);
             const response = await requestKugou('playlist_track_all', { id: String(id), pagesize: requestLimit, page: Math.floor(offset / requestLimit) + 1 });
-            return pageOf(listOf(response).map(normalizeKugouSong), response, requestLimit, offset);
+            const tracks = listOf(response).map(normalizeKugouSong);
+            // 普通歌单同样是倒着给的（同上，照 folia-android 的修法）：先留着原始响应把变换
+            // 记进诊断，再翻成官方客户端里从上往下看到的那一串。
+            if (tracks.length > 1) {
+                noteLibraryStep('kugou', 'playlist:client-order', {
+                    collection: String(id),
+                    tracks: tracks.length,
+                    transform: 'reversed',
+                    offset,
+                });
+                tracks.reverse();
+            }
+            return pageOf(tracks, response, requestLimit, offset);
         },
         async getCloudTracks(limit, offset) {
             const requestLimit = Math.min(Math.max(1, limit), KUGOU_MAX_PAGE_SIZE);
@@ -1467,6 +1608,7 @@ export const kugouProvider: OnlineMusicProvider = {
                 page: Math.floor(offset / pageSize) + 1,
                 pagesize: pageSize,
             });
+            throwIfKugouRefused(response, 'the album tracks');
             const items = listOf(response).map(raw => {
                 const song = normalizeKugouSong(raw);
                 if (song.album.name || !collection?.name) return song;

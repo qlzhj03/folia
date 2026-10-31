@@ -1,6 +1,7 @@
 import i18n from '../i18n/config';
 import type { LyricData, ReplayGainMode, SongResult } from '../types';
 import type { StructuredLyric } from '../types/navidrome';
+import { isCapacitorAndroid } from '../platform/runtime';
 import { detectTimedLyricFormat } from './lyrics/formatDetection';
 import { getLineRenderHints } from './lyrics/renderHints';
 import { isLocalPlaybackSong, isNavidromePlaybackSong, isStagePlaybackSong } from './appPlaybackGuards';
@@ -69,8 +70,12 @@ export const toSafeRemoteUrl = (url: string | null | undefined): string | null |
 
     try {
         const parsedUrl = new URL(normalizedUrl);
+        // 酷狗音频 CDN（fs.*.kugou.com）的 https 在部分节点上没有按酷狗域名配置证书，
+        // 一律 403，同一路径的 http 却能取到音频（2026-10-31 实测）。网页版受浏览器混合
+        // 内容规则约束仍要升级；安卓 WebView 的 cleartext 已放行，升级反而把地址弄坏。
         if (
             parsedUrl.protocol === 'http:' &&
+            !isCapacitorAndroid() &&
             parsedUrl.hostname.startsWith('fs.') &&
             parsedUrl.hostname.endsWith('.kugou.com')
         ) {
