@@ -364,6 +364,23 @@ export const installNativeAndroidBridge = async (): Promise<void> => {
   installFetchShim(plugin);
   installMessageBridge();
 
+  // 老版本打进包里的 PWA Service Worker（workbox precache）在升级装包后仍会把旧资源
+  // 供回页面——SW 的更新是「先旧后新」，清 HTTP 缓存也删不掉它。安卓构建已不再生成
+  // SW（vite.config.ts），这里把历史残留注销并清掉它的存储；不阻塞桥就绪。
+  void (async () => {
+    try {
+      const registrations = await navigator.serviceWorker?.getRegistrations?.() ?? [];
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+      const keys = typeof caches !== 'undefined' ? await caches.keys() : [];
+      await Promise.all(keys.map((key) => caches.delete(key)));
+      if (registrations.length || keys.length) {
+        console.log(`[FoliaNativeBridge] Removed legacy service workers (${registrations.length}) and caches (${keys.length})`);
+      }
+    } catch (error) {
+      console.warn('[FoliaNativeBridge] Legacy service worker cleanup failed', error);
+    }
+  })();
+
   // @ts-ignore 内置的那份扩展代码是纯 JavaScript，没有类型声明。
   const module = await import('../nativeBridge/api/folia.js');
   apiHandler = module.handleFoliaApiRequest as ApiHandler;
