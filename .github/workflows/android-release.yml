@@ -1,0 +1,159 @@
+name: Android Release
+
+on:
+  push:
+    branches:
+      - android
+    # 只监听标记文件：workflow 自身不进触发路径，否则改 CI 文件也会走一遍发布校验（marker
+    # 还没填时直接红 CI，marker 已填时可能把正式版提前发出去）。
+    paths:
+      - android-release
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 正式发布不取消在跑的构建：发布中途被顶掉会留下删了 tag 没建 release 的中间态。
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build signed release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # 手动 dispatch 只允许在 android 分支上跑：防止把别的分支的代码发成正式版。
+    if: github.event_name == 'push' || github.ref_name == 'android'
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build web assets and sync into the Android project
+        run: npm run cap:sync
+
+      # 正式签名：与 android-build.yml 相同的一套 secrets，读取逻辑见 android/app/build.gradle。
+      - name: Restore release signing material
+        env:
+          ANDROID_RELEASE_KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_RELEASE_KEYSTORE_B64}" ]; then
+            echo "::error::Release signing secrets (ANDROID_RELEASE_KEYSTORE etc.) are not configured on this repository."
+            exit 1
+          fi
+          KEYSTORE_PATH="${RUNNER_TEMP}/folia-release.keystore"
+          printf '%s' "${ANDROID_RELEASE_KEYSTORE_B64}" | base64 -d > "${KEYSTORE_PATH}"
+          {
+            echo "ANDROID_RELEASE_STORE_FILE=${KEYSTORE_PATH}"
+            echo "ANDROID_RELEASE_STORE_PASSWORD=${ANDROID_RELEASE_STORE_PASSWORD}"
+            echo "ANDROID_RELEASE_KEY_ALIAS=${ANDROID_RELEASE_KEY_ALIAS}"
+            echo "ANDROID_RELEASE_KEY_PASSWORD=${ANDROID_RELEASE_KEY_PASSWORD}"
+          } >> "$GITHUB_ENV"
+
+      # 正式发布版本号来自仓库根的 android-release 标记文件（随 PR 合并进 android 分支触发）：
+      # 内容一行纯版本号。重名 release / 残留 tag 都直接失败，不悄悄发错。
+      - name: Read release version from marker file
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < android-release)"
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::android-release 文件内容必须是 A.B.C 形式的版本号，当前是：${VERSION}"
+            exit 1
+          fi
+          # 正式版本只许前进：低于已发布最新 android-v* 的版本（笔误、带旧 marker 的 PR 重落）拒绝发布，
+          # 否则 GitHub 会把它标成 Latest，用户会下到旧版。
+          LATEST="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" | jq -r '[.[].tag_name | select(startswith("android-v")) | ltrimstr("android-v")] | map(select(test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))) | sort_by(split(".") | map(tonumber)) | last // empty')"
+          if [ -n "${LATEST}" ] && [ "${VERSION}" != "$(printf '%s\n%s\n' "${VERSION}" "${LATEST}" | sort -V | tail -1)" ]; then
+            echo "::error::android-release 版本 ${VERSION} 不高于已发布的最新正式版 android-v${LATEST}，拒绝发布。"
+            exit 1
+          fi
+          TAG="android-v${VERSION}"
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::Release ${TAG} 已存在；要重发先在 GitHub 上删掉旧 release，或换一个版本号。"
+            exit 1
+          fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} 已存在（release 可能被删过）。先删掉这个 tag 再重跑。"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "FOLIA_VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew --stacktrace "-PfoliaVersionName=${FOLIA_VERSION}" assembleRelease
+
+      - name: Upload signed release APK
+        uses: actions/upload-artifact@v6
+        with:
+          name: folia-android-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish stable release
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: build
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download signed release APK
+        uses: actions/download-artifact@v7
+        with:
+          name: folia-android-release-apk
+          path: apk
+
+      - name: Publish stable release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="android-v${VERSION}"
+          mv apk/app-release.apk "folia-android-${VERSION}.apk"
+          COMMIT_URL="https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          PUBLISHED_AT="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          cat > release-notes.md <<EOF
+          Folia Android ${VERSION} 正式版。
+
+          Source commit: ${COMMIT_URL}
+          Published at: ${PUBLISHED_AT}
+
+          下载 folia-android-${VERSION}.apk 安装；与预发布渠道（android-ci）同一把签名，可从预发布直接覆盖升级。
+          EOF
+          gh release create "${TAG}" "folia-android-${VERSION}.apk#Folia Android ${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Folia Android ${VERSION}" \
+            --notes-file release-notes.md \
+            --target "${GITHUB_SHA}"

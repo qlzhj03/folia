@@ -1,5 +1,33 @@
 apply plugin: 'com.android.application'
 
+// 正式签名材料的读取优先级：android/signing.properties（本地，不入库）> 环境变量（CI 的 secrets 注入）。
+// 材料齐全时 debug 和 release 变体统一用正式钥匙（本地开发构建才能覆盖安装在 CI 渠道装的包上）；
+// 没有材料时走 AGP 默认行为：debug 变体自动用本机生成的 debug.keystore 签名，release 变体不签名。
+def signingProps = new Properties()
+def signingPropsFile = rootProject.file('signing.properties')
+if (signingPropsFile.exists()) {
+    signingPropsFile.withInputStream { signingProps.load(it) }
+    // 半配置比不配置更危险：会静默走 AGP 默认签名，装到手机上才发现和渠道包签名冲突。
+    def missingKeys = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].findAll { !signingProps.getProperty(it) }
+    if (missingKeys) {
+        throw new GradleException("android/signing.properties 缺少键：${missingKeys.join('、')}。补全它，或删掉整个文件走 AGP 默认签名。")
+    }
+}
+def releaseStoreFile = signingProps.getProperty('storeFile') ?: System.getenv('ANDROID_RELEASE_STORE_FILE')
+def releaseStorePassword = signingProps.getProperty('storePassword') ?: System.getenv('ANDROID_RELEASE_STORE_PASSWORD')
+def releaseKeyAlias = signingProps.getProperty('keyAlias') ?: System.getenv('ANDROID_RELEASE_KEY_ALIAS')
+def releaseKeyPassword = signingProps.getProperty('keyPassword') ?: System.getenv('ANDROID_RELEASE_KEY_PASSWORD')
+def hasReleaseSigning = releaseStoreFile && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+
+// 版本号默认取仓库根 package.json（本地构建），CI 可用 -PfoliaVersionName 覆盖（正式渠道用
+// android-release 标记文件的版本）；versionCode 从版本号派生，让 Android 的升降级判断生效。
+def foliaVersionName = project.findProperty('foliaVersionName') ?: new groovy.json.JsonSlurper().parse(rootProject.file('../package.json')).version
+def foliaVersionCode = 1
+def foliaVersionParts = foliaVersionName.tokenize('.')
+if (foliaVersionParts.size() >= 3 && foliaVersionParts.every { it.isInteger() }) {
+    foliaVersionCode = (foliaVersionParts[0] as int) * 1000000 + (foliaVersionParts[1] as int) * 1000 + (foliaVersionParts[2] as int)
+}
+
 android {
     namespace = "com.qlzhj03.folia"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +35,8 @@ android {
         applicationId "com.qlzhj03.folia"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode foliaVersionCode
+        versionName foliaVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +44,26 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(releaseStoreFile)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
     buildTypes {
+        debug {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
         release {
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
