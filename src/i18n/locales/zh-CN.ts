@@ -412,6 +412,7 @@ export default {
     "stageWaiting": "等待连接",
     "stageActionUnavailable": "Stage 模式下不支持这个操作",
     "latticeUnavailableInFm": "Lattice 不支持私人 FM 模式",
+    "backAgainToExit": "再按一次退出",
     "latticeFmOpenedInPlayer": "Lattice 不支持私人 FM 模式，已使用普通播放器打开",
     "noPlayableSongs": "列表中没有可播放的歌曲",
     "songUnavailableTag": "已下架",

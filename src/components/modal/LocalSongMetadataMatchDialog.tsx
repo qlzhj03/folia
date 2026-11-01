@@ -3,6 +3,7 @@ import { Check, FileAudio, Loader2, Piano, Search, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { LocalSong } from '../../types';
 import type { LocalLibraryAssignment } from '../../types/localLibrary';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import { getLocalCoverAssetUrl } from '../../services/localCoverAssetUrl';
 import { applyOnlineMetadataCandidate, useImportedSnapshotForLocalSong } from '../../services/localSongMetadataMatchService';
 import { setLocalSongPureMusicMark } from '../../services/localSongMatchSelectionService';
@@ -136,6 +137,12 @@ export const LocalSongMetadataMatchDialog = ({ song, assignment, isDaylight, onC
     };
     const busy = applying || restoringLocalInfo || markingPureMusic;
     const panelTheme = isDaylight ? 'border-black/10 bg-white text-zinc-900' : 'border-white/10 bg-zinc-950 text-white';
+
+    // 只在手动匹配弹窗开着时挂载，返回键先关它（挂在装下它的整理面板上面）。
+    useBackHandler(true, () => {
+        onClose();
+        return true;
+    });
 
     return (
         <div data-folia-keyboard-window="true" className="fixed inset-0 z-[140] flex items-center justify-center bg-black/65 p-4 backdrop-blur-xl">

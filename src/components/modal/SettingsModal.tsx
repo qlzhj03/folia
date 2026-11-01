@@ -41,6 +41,7 @@ import { openOutsideLink } from '../../utils/system/outsideLink';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { useSettingsScrollSpy } from '../../hooks/useSettingsScrollSpy';
 import { useReducedMotionFor } from '../../hooks/useReducedMotionFor';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import { useShallow } from 'zustand/react/shallow';
 import type { ObsBrowserSourceStatus } from '../../types/obsBrowserSource';
 import type { LyricApiStatus } from '../../types/lyricApi';
@@ -941,6 +942,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isWorkWindowOpen, shouldCloseModalOnSubviewBack, onClose]);
+
+    // 系统返回键与 Escape 同一条梯子：自己的工作窗口（可视化试玩、主题公园）开着先关它，
+    // 否则整个关窗。设置窗里的四张对话框是 Sheet，自己登记了返回、挂在更上面，轮不到这里。
+    useBackHandler(true, () => {
+        if (isWorkWindowOpen) {
+            closeWorkWindows();
+            return true;
+        }
+        onClose();
+        return true;
+    });
 
     useEffect(() => {
         setIsSubSettingsViewOpen(isAnySubviewOpen);

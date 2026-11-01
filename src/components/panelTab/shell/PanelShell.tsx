@@ -4,6 +4,8 @@ import type { Theme } from '../../../types';
 import { usePlayerBottomBarBottomPx } from '../../../hooks/usePlayerBottomBarBottomPx';
 import { usePlayerOverlayObstacle } from '../../../hooks/usePlayerOverlayLayout';
 import { kitTransition, useKitReducedMotion } from '../../modal/settings/kit/motion';
+import { setIsPanelOpen } from '../../../stores/useAppViewStore';
+import { useBackHandler } from '../../../hooks/useBackHandler';
 import { panelTokens } from './panelTheme';
 import { FOLDED_PX } from './SongHeader';
 import { useMeasuredSize } from './useMeasuredSize';
@@ -147,6 +149,12 @@ const PanelSurface: React.FC<PanelSurfaceProps> = ({ hasHandle, isCover, tabKey,
 const PanelShell: React.FC<PanelShellProps> = ({ isOpen, handle, ...surface }) => {
     const bottomBarBottomPx = usePlayerBottomBarBottomPx();
     const { ref: layoutRef, invalidate: invalidateLayout } = usePlayerOverlayObstacle('player-panel', 'panel');
+
+    // 系统返回键与 Escape 同一道关：浮窗开着先收浮窗（开态在 useAppViewStore，收起与面板把手同一条路）。
+    useBackHandler(isOpen, () => {
+        setIsPanelOpen(false);
+        return true;
+    });
 
     return (
         <motion.div

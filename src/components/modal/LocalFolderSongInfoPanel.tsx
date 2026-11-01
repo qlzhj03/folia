@@ -3,6 +3,7 @@ import { Tags, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { LocalSong } from '../../types';
 import type { LocalLibraryAssignment } from '../../types/localLibrary';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import { FolderAutoMatchEditor } from '../local-library-entity/FolderAutoMatchEditor';
 import { LocalSongMetadataMatchDialog } from './LocalSongMetadataMatchDialog';
 
@@ -23,6 +24,12 @@ export const LocalFolderSongInfoPanel = ({ folderName, songs, assignments, isDay
     const [manualMatchSong, setManualMatchSong] = useState<LocalSong | null>(null);
     const assignmentBySongId = useMemo(() => new Map(assignments.map(item => [item.songId, item])), [assignments]);
     const panelTheme = isDaylight ? 'border-black/10 bg-white/90 text-zinc-900' : 'border-white/10 bg-zinc-950/90 text-white';
+
+    // 只在整理面板开着时挂载，返回键先关它。手动匹配的子弹窗自己登记、挂在更上面。
+    useBackHandler(true, () => {
+        onClose();
+        return true;
+    });
 
     return (
         <div data-folia-keyboard-window="true" className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-3 backdrop-blur-xl md:p-6">

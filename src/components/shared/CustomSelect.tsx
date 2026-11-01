@@ -1,4 +1,5 @@
 import React, { useState, useRef, useLayoutEffect, useCallback, useId } from 'react';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import { createPortal } from 'react-dom';
 import { AnimatePresence } from 'framer-motion';
 import { ChevronDown } from 'lucide-react';
@@ -127,6 +128,12 @@ export const CustomSelect: React.FC<CustomSelectProps> = ({
         menuRef,
         triggerRef,
         optionsPerPage: () => optionsPerPage(dropdownPosition?.maxHeight ?? DROPDOWN_MAX_HEIGHT, compact),
+    });
+
+    // 系统返回键与 Escape 同一道关：列表开着先收列表，不落在底下的浮层或页面上。
+    useBackHandler(isOpen, () => {
+        close();
+        return true;
     });
 
     // Positions the portaled menu against the trigger and flips it when viewport space is limited.

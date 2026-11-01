@@ -412,6 +412,7 @@ export default {
     "stageWaiting": "Đang chờ tín hiệu Stage",
     "stageActionUnavailable": "Thao tác không hỗ trợ trong chế độ Stage",
     "latticeUnavailableInFm": "Lattice không hỗ trợ chế độ FM cá nhân",
+    "backAgainToExit": "Nhấn quay lại lần nữa để thoát",
     "latticeFmOpenedInPlayer": "Lattice không hỗ trợ chế độ FM cá nhân. Đã mở bằng trình phát chuẩn",
     "noPlayableSongs": "Không có bài hát khả dụng trong danh sách",
     "songUnavailableTag": "Không khả dụng",

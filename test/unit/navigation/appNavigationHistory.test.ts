@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
     blockLatticeNavigationInFm,
     isStartupLatticeDeferred,
+    resolveAppBackAction,
     resolveStartupView,
     resolvePlayerCapsuleNavigationTarget,
     shouldNavigatePlayerBackThroughHistory,
@@ -49,6 +50,26 @@ describe('player navigation history', () => {
 
     it('pushes a new entry when opening the player from home', () => {
         expect(shouldReplacePlayerNavigation(state('home', 2))).toBe(false);
+    });
+});
+
+describe('app back action (system back key reaching the navigation layer)', () => {
+    it('steps back through app history when there are app records above the root', () => {
+        expect(resolveAppBackAction(2, 'home', false)).toBe('history');
+        expect(resolveAppBackAction(1, 'player', true)).toBe('history');
+    });
+
+    it('falls back to direct home for a playback surface on the startup entry', () => {
+        expect(resolveAppBackAction(0, 'player', false)).toBe('direct-home');
+        expect(resolveAppBackAction(0, 'lattice', false)).toBe('direct-home');
+    });
+
+    it('closes a search overlay opened with replace at the history root', () => {
+        expect(resolveAppBackAction(0, 'home', true)).toBe('close-search');
+    });
+
+    it('does not consume the press on the home root so the shell can offer exit', () => {
+        expect(resolveAppBackAction(0, 'home', false)).toBe('none');
     });
 });
 

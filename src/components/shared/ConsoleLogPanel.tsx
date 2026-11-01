@@ -10,6 +10,7 @@ import {
     type ConsoleLogEntry,
 } from '../../utils/consoleLogBuffer';
 import { readConsoleLogFilters, writeConsoleLogFilters } from '../../utils/consoleLogFilters';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import { copyText } from '../../utils/system/clipboard';
 
 // src/components/shared/ConsoleLogPanel.tsx
@@ -98,6 +99,12 @@ const FilterMenu: React.FC<{
     const [at, setAt] = useState<{ top: number; left: number; width: number } | null>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const sheetRef = useRef<HTMLDivElement>(null);
+
+    // 系统返回键与 Escape 同一道关：菜单开着先收菜单（at 非空即开着），不落到装着它的窗口上。
+    useBackHandler(at !== null, () => {
+        setAt(null);
+        return true;
+    });
 
     const place = () => {
         const box = buttonRef.current?.getBoundingClientRect();

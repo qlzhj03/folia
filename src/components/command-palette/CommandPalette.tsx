@@ -12,6 +12,7 @@ import { buildFlagSuggestions, type SyntaxSuggestion } from './syntax/suggest';
 import { getCommandDescription, getCommandTitle } from './commandText';
 import { getCommandPrimaryTerm } from './search/commandSearchIndex';
 import { isTextEntryTarget } from './useCommandPalette';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import PinnedCommandRow from './PinnedCommandRow';
 import CommandPaletteAllCommandsList from './CommandPaletteAllCommandsList';
 import { setIsCommandFilterOpen } from '../../stores/useAppViewStore';
@@ -382,6 +383,22 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [acceptSyntaxSuggestion, activeIndex, activeCommand, isComposing, isExecuting, isOpen, isShowingAllCommands, matches.length, onActiveCommandChange, onActiveIndexChange, onClose, onExecuteActive, onQueryChange, query, surface, surfaceArgs, syntaxIndex, syntaxSuggestions]);
+
+    // 系统返回键与 Escape 同一条梯子：命令的全列表先收起，surface 自己的返回（如缝里的筛选）优先，
+    // 最后才是关面板。派发按登记次序（即打开次序）从最上往下问：后开的 Sheet 登记在更上面，
+    // 轮不到这里；面板开在 Sheet 之上的少见叠法里，返回先关面板，与 Escape 先关 Sheet 相反，
+    // 各自都退最上层的那一个。
+    useBackHandler(isOpen, () => {
+        if (isShowingAllCommands) {
+            setIsShowingAllCommands(false);
+            return true;
+        }
+        if (surface?.onEscape?.(surfaceArgs)) {
+            return true;
+        }
+        onClose();
+        return true;
+    });
 
     if (filterAnchor) {
         return (

@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow';
 import VisualizerRenderer from '../VisualizerRenderer';
 import { type StoredCustomLyricsFont, type SubtitleContentMode, type SubtitleOverlayLayout, type Theme, type VisualizerMode } from '../../../types';
 import { useMediaQuery } from '../../../hooks/useMediaQuery';
+import { useBackHandler } from '../../../hooks/useBackHandler';
 import { selectVisualizerSettingsSnapshot, useVisualizerSettingsStore } from '../../../stores/useVisualizerSettingsStore';
 import { PictureGrid, Tooltip } from '../../modal/settings/kit';
 import { kitTransition, useKitReducedMotion } from '../../modal/settings/kit/motion';
@@ -648,6 +649,11 @@ const VisPlayground: React.FC<VisPlaygroundProps> = ({
             onSliderCommit={tuningDrafts.onSliderCommit}
         />
     );
+    // 系统返回键与 Escape 同一道关：字体层开着只收层，不关试玩窗。
+    useBackHandler(fontPickerTarget !== 'none', () => {
+        setFontPickerTarget('none');
+        return true;
+    });
     const pickingSubtitleFont = fontPickerTarget === 'subtitle';
     const fontPicker = fontPickerTarget !== 'none' && (
         <FontPicker

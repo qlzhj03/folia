@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useBackHandler } from '../../../../hooks/useBackHandler';
 import { POPOVER_GUTTER, placePopover, type PopoverAlign, type PopoverPlace, type PopoverSide } from './popoverPlace';
 
 // src/components/modal/settings/kit/Popover.tsx
@@ -58,6 +59,12 @@ export const Popover: React.FC<PopoverProps> = ({
     if (open && !present) {
         setPresent(true);
     }
+
+    // 系统返回键与 Escape 同一道关：开着先关这一层（登记次序晚于装下它的窗口，轮得到它）。
+    useBackHandler(open, () => {
+        onClose();
+        return true;
+    });
 
     useLayoutEffect(() => {
         setHost(anchorRef.current?.closest<HTMLElement>('.st-window') ?? null);

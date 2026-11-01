@@ -10,6 +10,8 @@ import type { BravaisHomeShortcut } from './bravaisHomeModels';
 import { resolveEscapeStep, type BravaisKeyAction } from './bravaisKeyboardModel';
 import type { BravaisHomeKeyAction } from './bravaisHomeKeys';
 import { findAdjacentSlot } from './bravaisNavigation';
+import { useBackHandler } from '../../../hooks/useBackHandler';
+import { useAppViewStore } from '../../../stores/useAppViewStore';
 import { setBravaisPendingOrigin } from './bravaisStageStore';
 import { armBravaisPlayingCard } from './bravaisPlayingCard';
 import { closeBravaisPanel } from './bravaisPanelHistory';
@@ -276,31 +278,51 @@ export const useBravaisInteractions = ({
         return true;
     }, [seamRef]);
 
+    /**
+     * Esc 阶梯走一级（设计稿 §10.8）：缝里的全局搜索面板开着先关它（面板开着时输入框自动拿焦点，聚焦时输入框自己的
+     * Escape 先到、不会走到这里），然后表单 / 聚焦卡 / 键盘焦点 / 面板 / 视图 / 过滤词 / 退层。返回 true 表示有级可退、
+     * 这次 Esc（或系统返回手势）被消耗。键盘与返回手势共用同一条阶梯。
+     */
+    const runEscapeLadder = useCallback((): boolean => {
+        const layer = displayRef.current?.layer;
+        if (!layer) return false;
+        if (layer.seam.home?.search) {
+            setBravaisSearchOpen(false);
+            return true;
+        }
+        const step = resolveEscapeStep({
+            hasForm: Boolean(layer.entries?.hasForm),
+            hasFocusCard: expandedRef.current !== null,
+            hasKeyboardFocus: focusedRef.current !== null,
+            hasPanel: useBravaisUiStore.getState().panelFor === layer.key,
+            hasViewMode: Boolean(layer.entries?.hasViewMode),
+            hasQuery: Boolean(layer.entries?.hasQuery),
+            canGoBack: Boolean(layer.onBack),
+        });
+        if (step === 'form') layer.entries?.cancelForm?.();
+        else if (step === 'focus-card') collapse();
+        else if (step === 'keyboard-focus') focusSlot(null);
+        else if (step === 'panel') closeBravaisPanel();
+        else if (step === 'view') layer.entries?.exitViewMode?.();
+        else if (step === 'query') layer.entries?.clearQuery?.();
+        else if (step === 'back') layer.onBack!();
+        return step !== null;
+    }, [collapse, displayRef, expandedRef, focusSlot, focusedRef]);
+
+    // 系统返回手势（安卓壳经 backDispatcher 来问）走进同一条阶梯，只在 bravais 墙可见（home 视图）时接：
+    // 阶梯没有可退的一级就不消费，交给导航层（历史后退）与壳层的退出提示。播放页盖着墙时不拦返回。
+    useBackHandler(true, () => {
+        if (useAppViewStore.getState().view !== 'home') return false;
+        return runEscapeLadder();
+    });
+
     const handleAction = useCallback((action: BravaisWallKeyAction, target: EventTarget | null): boolean => {
         const display = displayRef.current;
         const layer = display?.layer;
         if (!layer) return false;
         // Tab / Shift+Tab 都是「换到另一站」（只有两站，反向也是同一个去处）。
         if (action.type === 'tab') return handleTab(target);
-        if (action.type === 'escape') {
-            const step = resolveEscapeStep({
-                hasForm: Boolean(layer.entries?.hasForm),
-                hasFocusCard: expandedRef.current !== null,
-                hasKeyboardFocus: focusedRef.current !== null,
-                hasPanel: useBravaisUiStore.getState().panelFor === layer.key,
-                hasViewMode: Boolean(layer.entries?.hasViewMode),
-                hasQuery: Boolean(layer.entries?.hasQuery),
-                canGoBack: Boolean(layer.onBack),
-            });
-            if (step === 'form') layer.entries?.cancelForm?.();
-            else if (step === 'focus-card') collapse();
-            else if (step === 'keyboard-focus') focusSlot(null);
-            else if (step === 'panel') closeBravaisPanel();
-            else if (step === 'view') layer.entries?.exitViewMode?.();
-            else if (step === 'query') layer.entries?.clearQuery?.();
-            else if (step === 'back') layer.onBack!();
-            return step !== null;
-        }
+        if (action.type === 'escape') return runEscapeLadder();
         // B9 首页：F6 切页签；批量模式的 Ctrl+A / Ctrl+Enter / Delete（不在首页、不在批量模式时不接，按键照常放行）。
         if (action.type === 'cycle-tab') return layer.home?.cycleTab?.(action.delta) ?? false;
         if (action.type === 'open-search') {
@@ -381,7 +403,7 @@ export const useBravaisInteractions = ({
         else if (action.type === 'open-album') handlers.openAlbum(focused.key);
         else if (action.type === 'open-artist') handlers.openArtist(focused.key, 0);
         return true;
-    }, [collapse, displayRef, drawnRect, expand, expandedRef, focusSlot, focusWall, focusedRef, frameRef, handleTab, handlers, hasContent, isInSeam, itemAt, moveInSeam, seedSlot, tweenTo]);
+    }, [collapse, displayRef, drawnRect, expand, expandedRef, focusSlot, focusWall, focusedRef, frameRef, handleTab, handlers, hasContent, isInSeam, itemAt, moveInSeam, runEscapeLadder, seedSlot, tweenTo]);
 
     /**
      * 缝里的直达入口（特殊集合）：与点墙上那张卡同一条打开路径。先在墙上找这一项此刻屏内离缝最近的一份，找得到就把它记成

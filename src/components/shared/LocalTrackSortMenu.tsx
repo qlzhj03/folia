@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowDownAZ, ArrowUpAZ, CalendarClock, Check, ListOrdered, Type } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import type { LocalSongFolderSortDirection, LocalSongFolderSortField } from '../../utils/localSongSorting';
 
 // src/components/shared/LocalTrackSortMenu.tsx
@@ -24,6 +25,13 @@ export const LocalTrackSortMenu: React.FC<LocalTrackSortMenuProps> = ({ field, o
     const containerRef = useRef<HTMLDivElement>(null);
     const buttonRef = useRef<HTMLButtonElement>(null);
     const StrategyIcon = FIELD_ICONS[field] ?? Type;
+
+    // 系统返回键与 Escape 同一道关：列表开着先收列表，焦点还给按钮。
+    useBackHandler(isOpen, () => {
+        setIsOpen(false);
+        buttonRef.current?.focus();
+        return true;
+    });
 
     useEffect(() => {
         const closeOnOutsideClick = (event: MouseEvent) => {

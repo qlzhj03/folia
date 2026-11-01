@@ -3,6 +3,7 @@ import { motion, AnimatePresence, MotionValue, useMotionValueEvent } from 'frame
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { LyricData, Theme } from '../../types';
+import { useBackHandler } from '../../hooks/useBackHandler';
 
 interface LyricsTimelineModalProps {
     isOpen: boolean;
@@ -92,6 +93,12 @@ const LyricsTimelineModal: React.FC<LyricsTimelineModalProps> = ({
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isOpen, onClose]);
+
+    // 系统返回键与 Escape 同一道关：开着时间线时返回先关它。命令面板自己登记的返回在更上面。
+    useBackHandler(isOpen, () => {
+        onClose();
+        return true;
+    });
 
     // Handle user scroll
     const handleScroll = () => {

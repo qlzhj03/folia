@@ -24,6 +24,7 @@ import {
 import { useAppViewStore } from '../stores/useAppViewStore';
 import type { AppView, LatticeSource } from '../stores/useAppViewStore';
 import { usePlaybackStore } from '../stores/usePlaybackStore';
+import { useBackHandler } from './useBackHandler';
 import { resolvePlaybackSurface, usePlaybackEntryViewStore, type PlaybackEntryView } from '../stores/usePlaybackEntryViewStore';
 import { setStatusMessage } from '../stores/useStatusMessageStore';
 import i18n from '../i18n/config';
@@ -83,6 +84,25 @@ export const resolvePlayerCapsuleNavigationTarget = (
     if (view === 'lattice') return null;
     // fb3：「留在原处」没有自己的视图，显式要求进入播放视图（胶囊、启动、bravais 的「进入」）时去播放页。
     return resolvePlaybackSurface(playbackEntryView) === 'lattice' && !isFmMode ? 'lattice' : 'player';
+};
+
+/** 系统返回键轮到导航层（浮层都不要）时的动作：谁接住、怎么退。 */
+export type AppBackAction = 'history' | 'direct-home' | 'close-search' | 'none';
+
+/**
+ * 兜底返回的分支规则：历史上有应用自己的记录就 history.back()（与浏览器后退同路）；历史根上
+ * 的播放页与墙不是根，返回先回首页；replace 打开的搜索层不在历史里，手动走关搜索的替换；
+ * 真正的首页根不消费——交给壳层决定要不要退出。
+ */
+export const resolveAppBackAction = (
+    appHistoryIndex: number,
+    view: ViewState,
+    isSearchOpen: boolean,
+): AppBackAction => {
+    if (appHistoryIndex > 0) return 'history';
+    if (view !== 'home') return 'direct-home';
+    if (isSearchOpen) return 'close-search';
+    return 'none';
 };
 
 const getSearchHistorySnapshot = (): NavigationHistoryState['search'] => {
@@ -636,6 +656,29 @@ export function useAppNavigation() {
     const backCollection = useCallback(() => {
         popCollectionLayer();
     }, [popCollectionLayer]);
+
+    // 系统返回键（安卓壳经 backDispatcher 来问）走的应用内返回。这份登记在 App 挂载时就装上，
+    // 处在所有浮层登记的下面：浮层开着时先关浮层，轮到这里才按 resolveAppBackAction 退。
+    useBackHandler(true, () => {
+        const action = resolveAppBackAction(
+            getAppHistoryIndex(window.history.state as NavigationHistoryState | null),
+            useAppViewStore.getState().view,
+            useSearchNavigationStore.getState().isSearchOpen,
+        );
+        if (action === 'history') {
+            window.history.back();
+            return true;
+        }
+        if (action === 'direct-home') {
+            navigateDirectHome();
+            return true;
+        }
+        if (action === 'close-search') {
+            closeSearchView();
+            return true;
+        }
+        return false;
+    });
 
     return {
         currentView,

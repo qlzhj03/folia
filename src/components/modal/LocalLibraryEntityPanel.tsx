@@ -4,6 +4,7 @@ import { AlertCircle, CheckCircle2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { LocalSong } from '../../types';
 import type { LocalLibraryEntity } from '../../types/localLibrary';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import {
   mergeEntities,
   moveEntityMembersToExistingEntity,
@@ -67,6 +68,12 @@ export const LocalLibraryEntityPanel = ({
       setPending(false);
     }
   };
+
+  // 只在编辑态挂载，返回键（与 Escape 同一道关）先关这一层。
+  useBackHandler(true, () => {
+    onClose();
+    return true;
+  });
 
   return (
     <div

@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useLatticeSettingsStore } from '../../stores/useLatticeSettingsStore';
 import { openCommandPalette } from '../../stores/useAppViewStore';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { useBackHandler } from '../../hooks/useBackHandler';
 import { usePlayerBottomBarBottomPx } from '../../hooks/usePlayerBottomBarBottomPx';
 import { SlideActionButton } from '../shared/SlideActionButton';
 import { WallToolsQuickRow, WallToolsRow, type WallToolsEntry, type WallToolsQuickAction } from './WallToolsRows';
@@ -101,6 +102,12 @@ export function WallToolsSurface({ idPrefix, label, isDaylight, destination, ent
         setIsOpen(false);
         setShowHelp(false);
     };
+
+    // 系统返回键与 Escape 同一道关：面板开着先收面板（帮助层随面板一起）。
+    useBackHandler(isOpen, () => {
+        close();
+        return true;
+    });
 
     useEffect(() => {
         if (!isOpen) return undefined;

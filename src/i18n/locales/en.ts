@@ -412,6 +412,7 @@ export default {
     "stageWaiting": "Waiting for external Stage input",
     "stageActionUnavailable": "This action is unavailable in Stage mode",
     "latticeUnavailableInFm": "Lattice does not support Personal FM mode",
+    "backAgainToExit": "Press back again to exit",
     "latticeFmOpenedInPlayer": "Lattice does not support Personal FM mode. Opened the standard player instead",
     "noPlayableSongs": "No playable songs in this list",
     "songUnavailableTag": "Unavailable",

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, FileAudio, Loader2, Music, Search, X } from 'lucide-react';
 import type { SongResult } from '../../../types';
+import { useBackHandler } from '../../../hooks/useBackHandler';
 import { getSizedCoverUrl } from '../../../utils/coverUrl';
 import { calculateMatchScoreDetails } from '../../../utils/lyrics/matchScore';
 import {
@@ -82,6 +83,12 @@ export const LyricMatchWindow: React.FC<LyricMatchWindowProps> = ({
     const [isSaving, setIsSaving] = useState(false);
     const isMouseDownOnOverlayRef = useRef(false);
     const { songInfo, source, sources, query, results, isSearching, selectedResult } = search;
+
+    // 只在匹配窗开着时挂载，系统返回键与 Escape 之外的第三条关闭路：先关窗，不落在底下的页面上。
+    useBackHandler(true, () => {
+        onClose();
+        return true;
+    });
 
     // Dynamic theme classes
     const bgClass = isDaylight ? 'bg-white/90 border-white/20' : 'bg-zinc-900/95 border-white/10';

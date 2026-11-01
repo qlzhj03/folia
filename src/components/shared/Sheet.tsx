@@ -8,6 +8,7 @@ import { SettingsKitThemeContext, settingsTokens, useSettingsKitTheme } from '..
 import { KIT_EASE, KIT_MOTION, kitMotionTokens, kitTransition, useKitReducedMotion } from '../modal/settings/kit/motion';
 import { Tooltip } from '../modal/settings/kit';
 import { escapeCloses, tabTarget } from './sheetKeys';
+import { addBackHandler } from '../../utils/backDispatcher';
 
 // src/components/shared/Sheet.tsx
 // The frame of every dialog: a title and the close button at the top, the content in the middle,
@@ -212,6 +213,24 @@ const SheetFrame: React.FC<SheetFrameProps> = ({
 
         const token = Symbol('sheet');
         openSheets.push(token);
+        // 系统返回键与 Escape 同一条规则：最上层的窗先退；里面的下拉开着、或关闭被锁（closeDisabled）
+        // 时不关窗，但这一下仍算被最上层接住，不让返回落到底下的页面上。
+        const unregisterBack = addBackHandler(() => {
+            if (openSheets[openSheets.length - 1] !== token) {
+                return false;
+            }
+            if (!escapeCloses({
+                taken: false,
+                held: false,
+                composing: false,
+                popupOpen: panel.querySelector('[aria-haspopup][aria-expanded="true"]') !== null,
+                closeDisabled: closeDisabledRef.current,
+            })) {
+                return true;
+            }
+            requestCloseRef.current();
+            return true;
+        });
         if (!panel.contains(document.activeElement)) {
             (panel.querySelector<HTMLElement>('[data-autofocus]') ?? panel).focus({ preventScroll: true });
         }
@@ -254,6 +273,7 @@ const SheetFrame: React.FC<SheetFrameProps> = ({
 
         document.addEventListener('keydown', handleKeyDown);
         return () => {
+            unregisterBack();
             document.removeEventListener('keydown', handleKeyDown);
             openSheets.splice(openSheets.indexOf(token), 1);
             // Back to what opened the sheet, unless focus has since been put somewhere else.
