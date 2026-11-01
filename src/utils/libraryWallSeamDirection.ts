@@ -4,19 +4,21 @@
 // store、设置分区、命令面板与 stage 共用这一份。
 // 两种「自动」只看视口形状，不判断是不是手机：竖着拿的平板、拉成竖长条的桌面窗口一样算竖着的屏幕。高至少是宽的 1.1 倍才算竖着，
 // 接近方形的窗口在拖动时不会来回换方向。
+// 默认是「自动（反向）」（用户实测 2026-11-01）：手机竖屏用竖缝（列），横屏用横条——竖缝列在竖屏窄边上占宽太多、横屏横条
+// 与悬浮播放条互不打架，且墙分上下两半在宽屏上不空。
 
 export type LibraryWallSeamDirection = 'auto' | 'auto-reverse' | 'vertical' | 'horizontal';
 
 /** 设置分区与命令面板列出的顺序。 */
 export const LIBRARY_WALL_SEAM_DIRECTIONS: readonly LibraryWallSeamDirection[] = Object.freeze(['auto', 'auto-reverse', 'vertical', 'horizontal'] as const);
 
-export const DEFAULT_LIBRARY_WALL_SEAM_DIRECTION: LibraryWallSeamDirection = 'auto';
+export const DEFAULT_LIBRARY_WALL_SEAM_DIRECTION: LibraryWallSeamDirection = 'auto-reverse';
 
 export const isLibraryWallSeamDirection = (value: unknown): value is LibraryWallSeamDirection => (
     value === 'auto' || value === 'auto-reverse' || value === 'vertical' || value === 'horizontal'
 );
 
-/** 存储或导入的取值：认识的原样返回，其余回默认（自动）。 */
+/** 存储或导入的取值：认识的原样返回，其余回默认（自动（反向））。 */
 export const normalizeLibraryWallSeamDirection = (value: unknown): LibraryWallSeamDirection => (
     isLibraryWallSeamDirection(value) ? value : DEFAULT_LIBRARY_WALL_SEAM_DIRECTION
 );
