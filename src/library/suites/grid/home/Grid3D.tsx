@@ -301,7 +301,8 @@ export const Grid3D: React.FC<Grid3DProps> = (props) => {
         >
 
             {/* Main Header Container (Fades out when sliding/interacting) */}
-            <div className="transition-opacity duration-300 ease-in-out z-20 opacity-100 select-none">
+            <div className="transition-opacity duration-300 ease-in-out z-20 opacity-100 select-none"
+                style={{ paddingTop: 'var(--safe-area-inset-top, 0px)' }}>
                 <div className="grid grid-cols-2 md:grid-cols-3 items-center w-full max-w-7xl mx-auto p-4 md:p-8 gap-y-4 md:gap-y-0">
                     {/* Left title and settings */}
                     <div className="flex items-center justify-start order-1 md:order-none">

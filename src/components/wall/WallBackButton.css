@@ -6,7 +6,9 @@
    square-everything rule is deliberately overridden. */
 .lattice-back {
     position: absolute;
-    top: 20px;
+    /* 安卓壳的状态栏常显为透明叠加（capacitor.config.ts SystemBars），按钮避开它；var 由 SystemBars
+       注入，桌面与浏览器里恒为 0。 */
+    top: calc(20px + var(--safe-area-inset-top, 0px));
     left: 24px;
     z-index: 5;
     display: grid;
@@ -56,5 +58,5 @@
 :root[data-reduce-motion~='lattice'] .lattice-back.is-concealed { transition: none; }
 
 @media (max-width: 640px) {
-    .lattice-back { top: 14px; left: 16px; }
+    .lattice-back { top: calc(14px + var(--safe-area-inset-top, 0px)); left: 16px; }
 }

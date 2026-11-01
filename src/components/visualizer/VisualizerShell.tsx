@@ -236,7 +236,10 @@ const VisualizerShell = forwardRef<HTMLDivElement, VisualizerShellProps>(({
                         resolvedOnBack();
                     }}
                     className="absolute top-6 left-6 z-30 h-10 w-10 rounded-full flex items-center justify-center transition-colors backdrop-blur-md bg-black/20 hover:bg-white/10 text-white/60 pointer-events-auto"
-                    style={{ pointerEvents: isBackButtonVisible ? 'auto' : 'none' }}
+                    style={{
+                        pointerEvents: isBackButtonVisible ? 'auto' : 'none',
+                        top: 'calc(24px + var(--safe-area-inset-top, 0px))',
+                    }}
                 >
                     <ChevronLeft size={20} />
                 </motion.button>

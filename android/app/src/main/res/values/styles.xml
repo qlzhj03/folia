@@ -9,18 +9,17 @@
         <item name="colorAccent">@color/colorAccent</item>
     </style>
 
-    <!-- 安卓壳的常驻主题：应用是深色的，原生壳固定用深色父主题，系统浅色模式下也不出浅色底条；
-         windowFullscreen 让状态栏从窗口创建起就隐藏（冷启动闪屏期间同样无状态栏）。 -->
+    <!-- 安卓壳的常驻主题：应用是深色的，原生壳固定用深色父主题，系统浅色模式下也不出浅色底条。
+         不设 windowFullscreen：状态栏要常显（透明叠加在内容上），隐藏它会让系统的第一次
+         返回手势被拿去唤出状态栏、应用收不到（见 capacitor.config.ts 的 SystemBars 注释）。 -->
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
         <item name="android:windowBackground">@color/foliaBackground</item>
-        <item name="android:windowFullscreen">true</item>
     </style>
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
-        <item name="android:windowFullscreen">true</item>
     </style>
 </resources>

@@ -135,7 +135,11 @@ const PagePonderTouchButton: React.FC<PagePonderTouchButtonProps> = ({ theme, is
             className={`fixed right-5 top-5 z-[190] h-12 w-12 rounded-full transition-[opacity,transform] active:scale-95 ${
                 isRevealed ? 'pd-t-enter opacity-100' : `pd-t-base pointer-events-none opacity-0 ${calm ? '' : 'scale-[0.94]'}`
             }`}
-            style={{ ...ponderLayerTokens(isDaylight, theme), ...ponderMotionTokens(calm) }}
+            style={{
+                top: 'calc(20px + var(--safe-area-inset-top, 0px))',
+                ...ponderLayerTokens(isDaylight, theme),
+                ...ponderMotionTokens(calm),
+            }}
         >
             <span
                 className="grid h-full w-full place-items-center rounded-full bg-[var(--st-card)] text-[color:var(--st-t1)] shadow-[0_0_0_1px_var(--st-line),0_8px_20px_rgba(0,0,0,0.25)]"
